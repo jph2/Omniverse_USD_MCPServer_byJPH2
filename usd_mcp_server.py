@@ -17,34 +17,294 @@ import json
 import re
 import argparse
 import sys
-from typing import Dict, List, Any, Optional, Union
+import logging
+import platform
+import threading
+import time
+import uuid
+from pathlib import Path
+from datetime import datetime
+from typing import Dict, List, Any, Optional, Union, Set
 
-# Create a named server
-mcp = FastMCP("Omniverse_USD_MCPServer_byJPH2")
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler("usd_mcp_server.log")
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# Version information
+VERSION = "0.2.0"
+SERVER_NAME = "Omniverse_USD_MCPServer_byJPH2"
+
+# Track server start time
+server_start_time = time.time()
+
+# Create a named server with version
+mcp = FastMCP(SERVER_NAME, version=VERSION)
+
+# Add server metadata
+mcp.add_server_metadata({
+    "description": "MCP server for Universal Scene Description (USD) and NVIDIA Omniverse",
+    "author": "Jan Haluszka",
+    "website": "https://github.com/jph2/Omniverse_USD_MCPServer_byJPH2",
+    "license": "MIT",
+    "environment": {
+        "os": platform.system(),
+        "python": platform.python_version(),
+        "usd_version": getattr(Usd, "GetVersion", lambda: "unknown")()
+    }
+})
+
+# Stage cache dictionary
+stage_cache = {}
+# Track stage access times for cache management
+stage_access_times = {}
+# Track stage modifications
+stage_modified = {}
+# Maximum number of stages to keep in cache
+MAX_CACHE_SIZE = 10
+# Cache maintenance interval in seconds
+CACHE_MAINTENANCE_INTERVAL = 300  # 5 minutes
+
+# Custom exceptions
+class StageError(Exception):
+    """Error raised when operations on a USD stage fail"""
+    pass
+
+class MeshError(Exception):
+    """Error raised when mesh operations fail"""
+    pass
+
+class CacheError(Exception):
+    """Error raised when cache operations fail"""
+    pass
+
+# Helper functions for response formatting
+def success_response(message: str, data: Optional[Dict[str, Any]] = None) -> str:
+    """Format a successful response as JSON"""
+    response = {
+        "ok": True,
+        "message": message,
+        "data": data or {},
+        "timestamp": datetime.now().isoformat()
+    }
+    return json.dumps(response)
+
+def error_response(message: str, error_code: Optional[str] = None) -> str:
+    """Format an error response as JSON"""
+    response = {
+        "ok": False,
+        "message": message,
+        "error_code": error_code or "UNKNOWN_ERROR",
+        "data": {},
+        "timestamp": datetime.now().isoformat()
+    }
+    return json.dumps(response)
+
+# Cache management functions
+def maintain_stage_cache():
+    """Background thread function to maintain the stage cache"""
+    while True:
+        try:
+            time.sleep(CACHE_MAINTENANCE_INTERVAL)
+            cleanup_stage_cache()
+        except Exception as e:
+            logger.exception(f"Error during cache maintenance: {e}")
+
+def cleanup_stage_cache():
+    """Remove least recently used stages from cache if cache exceeds maximum size"""
+    global stage_cache, stage_access_times
+    
+    if len(stage_cache) <= MAX_CACHE_SIZE:
+        return
+    
+    # Get list of stages sorted by access time (oldest first)
+    sorted_stages = sorted(stage_access_times.items(), key=lambda x: x[1])
+    
+    # Number of stages to remove
+    num_to_remove = len(stage_cache) - MAX_CACHE_SIZE
+    
+    # Remove oldest stages
+    for i in range(num_to_remove):
+        stage_path = sorted_stages[i][0]
+        if stage_path in stage_cache:
+            try:
+                logger.info(f"Unloading stage from cache: {stage_path}")
+                # Check if stage is modified
+                if stage_path in stage_modified and stage_modified[stage_path]:
+                    logger.warning(f"Unloading modified stage: {stage_path}")
+                    # Save stage before unloading
+                    stage_cache[stage_path].GetRootLayer().Save()
+                # Unload the stage
+                stage_cache[stage_path].Unload()
+                # Remove from cache and tracking
+                del stage_cache[stage_path]
+                del stage_access_times[stage_path]
+                if stage_path in stage_modified:
+                    del stage_modified[stage_path]
+            except Exception as e:
+                logger.exception(f"Error unloading stage {stage_path}: {e}")
+
+# Start the cache maintenance thread
+cache_thread = threading.Thread(target=maintain_stage_cache, daemon=True)
+cache_thread.start()
 
 # =============================================================================
 # USD Stage Tools
 # =============================================================================
 
 @mcp.tool()
-def create_stage(file_path: str) -> str:
+def create_stage(file_path: str, template: Optional[str] = None, up_axis: str = "Y") -> str:
     """Create a new USD stage and save it to the specified file path
     
     Args:
         file_path: Path where the USD stage should be saved
+        template: Optional template to use ('empty', 'basic', 'full')
+        up_axis: Up axis for the stage ('Y' or 'Z')
         
     Returns:
-        Confirmation message or error description
+        JSON string with success status, message, and stage path data
     """
     try:
+        # Validate parameters
+        if up_axis not in ['Y', 'Z']:
+            raise ValueError(f"Invalid up_axis: {up_axis}. Must be 'Y' or 'Z'")
+            
+        if template and template not in ['empty', 'basic', 'full']:
+            raise ValueError(f"Invalid template: {template}. Must be 'empty', 'basic', or 'full'")
+        
+        # Ensure directory exists
+        folder = os.path.dirname(file_path)
+        if folder and not os.path.isdir(folder):
+            os.makedirs(folder, exist_ok=True)
+            
+        # Create new stage
         stage = Usd.Stage.CreateNew(file_path)
-        # Create a root xform prim
+        if not stage:
+            raise StageError(f"Unable to create stage at '{file_path}'")
+        
+        # Create stage content based on template
+        if not template or template == 'empty':
+            # Just create an empty root prim
         root_prim = UsdGeom.Xform.Define(stage, '/root')
         stage.SetDefaultPrim(root_prim.GetPrim())
+        elif template == 'basic':
+            # Create basic scene structure
+            root_prim = UsdGeom.Xform.Define(stage, '/World')
+            stage.SetDefaultPrim(root_prim.GetPrim())
+            
+            # Add a camera
+            camera = UsdGeom.Camera.Define(stage, '/World/Camera')
+            camera.CreateFocalLengthAttr(24.0)
+            camera.CreateClippingRangeAttr((0.01, 10000.0))
+            camera.CreateFocusDistanceAttr(5.0)
+            
+            # Add a light
+            light = UsdGeom.Xform.Define(stage, '/World/Light')
+        elif template == 'full':
+            # Create comprehensive scene structure
+            world = UsdGeom.Xform.Define(stage, '/World')
+            stage.SetDefaultPrim(world.GetPrim())
+            
+            # Create useful subgroups
+            UsdGeom.Xform.Define(stage, '/World/Geometry')
+            UsdGeom.Xform.Define(stage, '/World/Cameras')
+            UsdGeom.Xform.Define(stage, '/World/Lights')
+            UsdGeom.Xform.Define(stage, '/World/Materials')
+            
+            # Add a default camera
+            camera = UsdGeom.Camera.Define(stage, '/World/Cameras/MainCamera')
+            camera.CreateFocalLengthAttr(24.0)
+            camera.CreateClippingRangeAttr((0.01, 10000.0))
+            camera.CreateFocusDistanceAttr(5.0)
+            
+            # Create a ground plane
+            ground = UsdGeom.Mesh.Define(stage, '/World/Geometry/GroundPlane')
+            ground.CreatePointsAttr([(-10, 0, -10), (10, 0, -10), (10, 0, 10), (-10, 0, 10)])
+            ground.CreateFaceVertexCountsAttr([4])
+            ground.CreateFaceVertexIndicesAttr([0, 1, 2, 3])
+            ground.CreateNormalsAttr([(0, 1, 0), (0, 1, 0), (0, 1, 0), (0, 1, 0)])
+            
+            # Add a key light
+            key_light = UsdGeom.Xform.Define(stage, '/World/Lights/KeyLight')
+        
+        # Set stage metadata
+        with Sdf.ChangeBlock():
+            # Set up axis
+            UsdGeom.SetStageUpAxis(stage, up_axis)
+            
+            # Set time codes
+            stage.SetStartTimeCode(1)
+            stage.SetEndTimeCode(240)  # Assume 240 frames (10 seconds at 24 fps)
+            
+            # Set meters per unit
+            UsdGeom.SetStageMetersPerUnit(stage, 0.01)  # 1 unit = 1 cm
+            
+            # Add creation info
+            stage.GetRootLayer().SetDocumentation(f"Created by {SERVER_NAME} v{VERSION} on {datetime.now().isoformat()}")
+            
+            # Add custom layer metadata
+            stage.GetRootLayer().customLayerData = {
+                "creator": SERVER_NAME,
+                "version": VERSION,
+                "created": datetime.now().isoformat(),
+                "template": template or "empty"
+            }
+        
+        # Save stage
         stage.GetRootLayer().Save()
-        return f"Successfully created USD stage at {file_path}"
+        
+        # Generate a unique ID for this stage
+        stage_id = str(uuid.uuid4())
+        
+        # Cache stage with absolute path as key
+        abs_path = os.path.abspath(file_path)
+        stage_cache[abs_path] = stage
+        stage_access_times[abs_path] = time.time()
+        stage_modified[abs_path] = False
+        
+        return success_response(
+            f"Successfully created USD stage at {file_path}", 
+            {
+                "stage_path": file_path,
+                "stage_id": stage_id,
+                "template": template or "empty",
+                "up_axis": up_axis,
+                "default_prim": str(stage.GetDefaultPrim().GetPath())
+            }
+        )
     except Exception as e:
-        return f"Error creating stage: {str(e)}"
+        logger.exception(f"Error creating stage: {str(e)}")
+        return error_response(f"Error creating stage: {str(e)}", "STAGE_CREATE_ERROR")
+
+@mcp.tool()
+def close_stage(file_path: str) -> str:
+    """Unload and release a USD stage from memory
+    
+    Args:
+        file_path: Path to the USD stage to close
+        
+    Returns:
+        JSON string with success status and message
+    """
+    try:
+        abs_path = os.path.abspath(file_path)
+        if abs_path in stage_cache:
+            # Explicitly unload the stage
+            stage_cache[abs_path].Unload()
+            # Remove from cache
+            del stage_cache[abs_path]
+            return success_response(f"Stage {file_path} successfully closed")
+        else:
+            return error_response(f"Stage {file_path} not found in cache")
+    except Exception as e:
+        logger.exception(f"Error closing stage: {str(e)}")
+        return error_response(f"Error closing stage: {str(e)}")
 
 @mcp.tool()
 def analyze_stage(file_path: str) -> str:
@@ -57,12 +317,18 @@ def analyze_stage(file_path: str) -> str:
         JSON string containing stage information or error description
     """
     try:
+        abs_path = os.path.abspath(file_path)
         if not os.path.exists(file_path):
-            return f"File not found: {file_path}"
+            return error_response(f"File not found: {file_path}")
         
+        # Try to use cached stage or open a new one
+        if abs_path in stage_cache:
+            stage = stage_cache[abs_path]
+        else:
         stage = Usd.Stage.Open(file_path)
         if not stage:
-            return f"Failed to open stage: {file_path}"
+                return error_response(f"Failed to open stage: {file_path}")
+            stage_cache[abs_path] = stage
         
         # Get basic stage information
         result = {
@@ -73,7 +339,8 @@ def analyze_stage(file_path: str) -> str:
             "prims": []
         }
         
-        # Traverse prim hierarchy
+        # Traverse prim hierarchy with SdfChangeBlock for better performance
+        with Sdf.ChangeBlock():
         for prim in Usd.PrimRange.Stage(stage):
             prim_data = {
                 "path": str(prim.GetPath()),
@@ -102,9 +369,10 @@ def analyze_stage(file_path: str) -> str:
             
             result["prims"].append(prim_data)
         
-        return json.dumps(result, indent=2)
+        return success_response("Stage analysis complete", result)
     except Exception as e:
-        return f"Error analyzing stage: {str(e)}"
+        logger.exception(f"Error analyzing stage: {str(e)}")
+        return error_response(f"Error analyzing stage: {str(e)}")
 
 @mcp.tool()
 def create_mesh(
@@ -124,12 +392,39 @@ def create_mesh(
         face_vertex_indices: Indices into the points array for each vertex of each face
         
     Returns:
-        Confirmation message or error description
+        JSON string with success status and message
     """
     try:
-        # Open existing stage or create a new one
-        stage = Usd.Stage.Open(file_path) if os.path.exists(file_path) else Usd.Stage.CreateNew(file_path)
+        # Validate inputs
+        if not points:
+            raise MeshError("Points list cannot be empty")
         
+        if not face_vertex_counts:
+            raise MeshError("Face vertex counts list cannot be empty")
+            
+        if not face_vertex_indices:
+            raise MeshError("Face vertex indices list cannot be empty")
+            
+        if len(face_vertex_indices) != sum(face_vertex_counts):
+            raise MeshError(f"Face vertex indices count ({len(face_vertex_indices)}) does not match sum of face vertex counts ({sum(face_vertex_counts)})")
+        
+        abs_path = os.path.abspath(file_path)
+        # Use cached stage or open/create a new one
+        if abs_path in stage_cache:
+            stage = stage_cache[abs_path]
+        else:
+            if os.path.exists(file_path):
+                stage = Usd.Stage.Open(file_path)
+            else:
+                stage = Usd.Stage.CreateNew(file_path)
+            
+            if not stage:
+                raise StageError(f"Failed to open or create stage: {file_path}")
+            
+            stage_cache[abs_path] = stage
+        
+        # Use a ChangeBlock for performance
+        with Sdf.ChangeBlock():
         # Create mesh
         mesh = UsdGeom.Mesh.Define(stage, prim_path)
         
@@ -146,9 +441,1293 @@ def create_mesh(
         # Save stage
         stage.GetRootLayer().Save()
         
-        return f"Successfully created mesh at {prim_path}"
+        return success_response(
+            f"Successfully created mesh at {prim_path}",
+            {
+                "stage_path": file_path,
+                "prim_path": prim_path
+            }
+        )
     except Exception as e:
-        return f"Error creating mesh: {str(e)}"
+        logger.exception(f"Error creating mesh: {str(e)}")
+        return error_response(f"Error creating mesh: {str(e)}")
+
+# =============================================================================
+# Advanced USD Tools
+# =============================================================================
+
+@mcp.tool()
+def create_reference(file_path: str, prim_path: str, reference_file_path: str, reference_prim_path: str = "") -> str:
+    """Add a reference to an external USD file
+    
+    Args:
+        file_path: Path to the target USD file
+        prim_path: Path where to create/add reference
+        reference_file_path: Path to the referenced USD file
+        reference_prim_path: Optional prim path within the referenced file (defaults to root)
+        
+    Returns:
+        JSON string with success status and message
+    """
+    try:
+        # Validate input
+        if not os.path.exists(reference_file_path):
+            raise ValueError(f"Referenced file does not exist: {reference_file_path}")
+            
+        abs_path = os.path.abspath(file_path)
+        # Use cached stage or open/create a new one
+        if abs_path in stage_cache:
+            stage = stage_cache[abs_path]
+        else:
+            if os.path.exists(file_path):
+                stage = Usd.Stage.Open(file_path)
+            else:
+                stage = Usd.Stage.CreateNew(file_path)
+            
+            if not stage:
+                raise StageError(f"Failed to open or create stage: {file_path}")
+            
+            stage_cache[abs_path] = stage
+            stage_access_times[abs_path] = time.time()
+        
+        # Get or create the prim
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim:
+            # Create the required prim if it doesn't exist
+            prim = UsdGeom.Xform.Define(stage, prim_path).GetPrim()
+        
+        # Add the reference
+        prim.GetReferences().AddReference(reference_file_path, reference_prim_path)
+        
+        # Mark stage as modified
+        stage_modified[abs_path] = True
+        
+        # Save stage
+        stage.GetRootLayer().Save()
+        
+        return success_response(
+            f"Successfully added reference to {reference_file_path} at {prim_path}",
+            {
+                "stage_path": file_path,
+                "prim_path": prim_path,
+                "reference_path": reference_file_path,
+                "reference_prim_path": reference_prim_path or "/"
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error adding reference: {str(e)}")
+        return error_response(f"Error adding reference: {str(e)}")
+
+@mcp.tool()
+def create_material(file_path: str, material_path: str, diffuse_color: tuple = (0.8, 0.8, 0.8), metallic: float = 0.0, roughness: float = 0.4) -> str:
+    """Create an OmniPBR material in a USD stage
+    
+    Args:
+        file_path: Path to the USD file
+        material_path: Path where to create the material
+        diffuse_color: RGB tuple for diffuse color (default: light gray)
+        metallic: Metallic value between 0.0 and 1.0 (default: 0.0)
+        roughness: Roughness value between 0.0 and 1.0 (default: 0.4)
+        
+    Returns:
+        JSON string with success status and message
+    """
+    try:
+        # Validate parameters
+        if not (0 <= metallic <= 1):
+            raise ValueError(f"Metallic value must be between 0 and 1, got {metallic}")
+        if not (0 <= roughness <= 1): 
+            raise ValueError(f"Roughness value must be between 0 and 1, got {roughness}")
+            
+        abs_path = os.path.abspath(file_path)
+        # Use cached stage or open/create a new one
+        if abs_path in stage_cache:
+            stage = stage_cache[abs_path]
+        else:
+            if os.path.exists(file_path):
+                stage = Usd.Stage.Open(file_path)
+            else:
+                stage = Usd.Stage.CreateNew(file_path)
+            
+            if not stage:
+                raise StageError(f"Failed to open or create stage: {file_path}")
+            
+            stage_cache[abs_path] = stage
+            stage_access_times[abs_path] = time.time()
+        
+        # Create material with Sdf.ChangeBlock for better performance
+        with Sdf.ChangeBlock():
+            # Create material
+            from pxr import UsdShade
+            material = UsdShade.Material.Define(stage, material_path)
+            
+            # Create shader
+            shader_path = f"{material_path}/Shader"
+            shader = UsdShade.Shader.Define(stage, shader_path)
+            shader.CreateIdAttr("OmniPBR")
+            
+            # Set shader inputs
+            shader.CreateInput("diffuse_color", Sdf.ValueTypeNames.Color3f).Set(diffuse_color)
+            shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(metallic)
+            shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(roughness)
+            
+            # Connect shader to material
+            material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+        
+        # Mark stage as modified
+        stage_modified[abs_path] = True
+        
+        # Save stage
+        stage.GetRootLayer().Save()
+        
+        return success_response(
+            f"Successfully created material at {material_path}",
+            {
+                "stage_path": file_path,
+                "material_path": material_path,
+                "properties": {
+                    "diffuse_color": diffuse_color,
+                    "metallic": metallic,
+                    "roughness": roughness
+                }
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error creating material: {str(e)}")
+        return error_response(f"Error creating material: {str(e)}")
+
+@mcp.tool()
+def bind_material(file_path: str, prim_path: str, material_path: str) -> str:
+    """Bind a material to a prim in the USD stage
+    
+    Args:
+        file_path: Path to the USD file
+        prim_path: Path to the prim to bind the material to
+        material_path: Path to the material to bind
+        
+    Returns:
+        JSON string with success status and message
+    """
+    try:
+        abs_path = os.path.abspath(file_path)
+        # Use cached stage or open a new one
+        if abs_path in stage_cache:
+            stage = stage_cache[abs_path]
+        else:
+            if not os.path.exists(file_path):
+                return error_response(f"File not found: {file_path}")
+                
+            stage = Usd.Stage.Open(file_path)
+            if not stage:
+                return error_response(f"Failed to open stage: {file_path}")
+                
+            stage_cache[abs_path] = stage
+            stage_access_times[abs_path] = time.time()
+        
+        # Get the prim and material
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim:
+            return error_response(f"Prim not found: {prim_path}")
+            
+        material_prim = stage.GetPrimAtPath(material_path)
+        if not material_prim:
+            return error_response(f"Material not found: {material_path}")
+        
+        # Bind material to prim
+        from pxr import UsdShade
+        material = UsdShade.Material(material_prim)
+        UsdShade.MaterialBindingAPI(prim).Bind(material)
+        
+        # Mark stage as modified
+        stage_modified[abs_path] = True
+        
+        # Save stage
+        stage.GetRootLayer().Save()
+        
+        return success_response(
+            f"Successfully bound material {material_path} to {prim_path}",
+            {
+                "stage_path": file_path,
+                "prim_path": prim_path,
+                "material_path": material_path
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error binding material: {str(e)}")
+        return error_response(f"Error binding material: {str(e)}")
+
+@mcp.tool()
+def create_primitive(file_path: str, prim_type: str, prim_path: str, size: float = 1.0, position: tuple = (0, 0, 0)) -> str:
+    """Create a geometric primitive in a USD stage
+    
+    Args:
+        file_path: Path to the USD file
+        prim_type: Type of primitive ('cube', 'sphere', 'cylinder', 'cone')
+        prim_path: Path where to create the primitive
+        size: Size of the primitive (default: 1.0)
+        position: XYZ position tuple (default: origin)
+        
+    Returns:
+        JSON string with success status and message
+    """
+    try:
+        # Validate prim_type
+        valid_types = {'cube', 'sphere', 'cylinder', 'cone'}
+        if prim_type.lower() not in valid_types:
+            raise ValueError(f"Invalid primitive type: {prim_type}. Must be one of {valid_types}")
+        
+        abs_path = os.path.abspath(file_path)
+        # Use cached stage or open/create a new one
+        if abs_path in stage_cache:
+            stage = stage_cache[abs_path]
+        else:
+            if os.path.exists(file_path):
+                stage = Usd.Stage.Open(file_path)
+            else:
+                stage = Usd.Stage.CreateNew(file_path)
+            
+            if not stage:
+                raise StageError(f"Failed to open or create stage: {file_path}")
+            
+            stage_cache[abs_path] = stage
+            stage_access_times[abs_path] = time.time()
+        
+        # Create the primitive
+        with Sdf.ChangeBlock():
+            if prim_type.lower() == 'cube':
+                prim = UsdGeom.Cube.Define(stage, prim_path)
+                prim.CreateSizeAttr(size)
+            elif prim_type.lower() == 'sphere':
+                prim = UsdGeom.Sphere.Define(stage, prim_path)
+                prim.CreateRadiusAttr(size / 2.0)
+            elif prim_type.lower() == 'cylinder':
+                prim = UsdGeom.Cylinder.Define(stage, prim_path)
+                prim.CreateRadiusAttr(size / 2.0)
+                prim.CreateHeightAttr(size)
+            elif prim_type.lower() == 'cone':
+                prim = UsdGeom.Cone.Define(stage, prim_path)
+                prim.CreateRadiusAttr(size / 2.0)
+                prim.CreateHeightAttr(size)
+            
+            # Set position
+            from pxr import Gf
+            xform_api = UsdGeom.XformCommonAPI(prim)
+            xform_api.SetTranslate(Gf.Vec3d(position))
+        
+        # Mark stage as modified
+        stage_modified[abs_path] = True
+        
+        # Save stage
+        stage.GetRootLayer().Save()
+        
+        return success_response(
+            f"Successfully created {prim_type} at {prim_path}",
+            {
+                "stage_path": file_path,
+                "prim_path": prim_path,
+                "prim_type": prim_type,
+                "size": size,
+                "position": position
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error creating primitive: {str(e)}")
+        return error_response(f"Error creating primitive: {str(e)}")
+
+@mcp.tool()
+def export_to_format(file_path: str, output_path: str, format: str = "usda") -> str:
+    """Export a USD stage to a different format
+    
+    Args:
+        file_path: Path to the source USD file
+        output_path: Path where to save the exported file
+        format: Target format ('usda', 'usdc', 'usdz')
+        
+    Returns:
+        JSON string with success status and message
+    """
+    try:
+        # Validate format
+        if format.lower() not in ['usda', 'usdc', 'usdz']:
+            raise ValueError(f"Invalid format: {format}. Must be 'usda', 'usdc', or 'usdz'")
+        
+        # Make sure source file exists
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Source file not found: {file_path}")
+            
+        # Ensure directory exists for output file
+        output_dir = os.path.dirname(output_path)
+        if output_dir and not os.path.isdir(output_dir):
+            os.makedirs(output_dir, exist_ok=True)
+        
+        # Open the stage
+        stage = None
+        abs_path = os.path.abspath(file_path)
+        
+        if abs_path in stage_cache:
+            # Use cached stage
+            stage = stage_cache[abs_path]
+            # Update access time
+            stage_access_times[abs_path] = time.time()
+            
+            # Save if modified
+            if stage_modified.get(abs_path, False):
+                stage.GetRootLayer().Save()
+        else:
+            # Open a new stage
+            stage = Usd.Stage.Open(file_path)
+            if not stage:
+                raise StageError(f"Failed to open stage: {file_path}")
+        
+        # Export to the requested format
+        if format.lower() == 'usda':
+            # ASCII format
+            stage.Export(output_path, args={'format': 'usda'})
+        elif format.lower() == 'usdc':
+            # Binary format
+            stage.Export(output_path, args={'format': 'usdc'})
+        elif format.lower() == 'usdz':
+            # USD zip archive format
+            from pxr import UsdUtils
+            # Create a new USDZ package
+            result = UsdUtils.CreateNewARKitUsdzPackage(
+                stage.GetRootLayer().realPath, 
+                output_path
+            )
+            if not result:
+                raise StageError(f"Failed to create USDZ package: {output_path}")
+        
+        return success_response(
+            f"Successfully exported stage to {format.upper()} format at {output_path}",
+            {
+                "source_path": file_path,
+                "output_path": output_path,
+                "format": format.upper()
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error exporting stage: {str(e)}")
+        return error_response(f"Error exporting stage: {str(e)}")
+
+# =============================================================================
+# Physics Tools
+# =============================================================================
+
+@mcp.tool()
+def setup_physics_scene(file_path: str, gravity: tuple = (0, -9.81, 0)) -> str:
+    """Setup physics scene in a USD stage
+    
+    Args:
+        file_path: Path to the USD file
+        gravity: XYZ gravity vector (default: Earth gravity)
+        
+    Returns:
+        JSON string with success status and message
+    """
+    try:
+        abs_path = os.path.abspath(file_path)
+        # Use cached stage or open/create a new one
+        if abs_path in stage_cache:
+            stage = stage_cache[abs_path]
+        else:
+            if os.path.exists(file_path):
+                stage = Usd.Stage.Open(file_path)
+            else:
+                stage = Usd.Stage.CreateNew(file_path)
+            
+            if not stage:
+                raise StageError(f"Failed to open or create stage: {file_path}")
+            
+            stage_cache[abs_path] = stage
+            stage_access_times[abs_path] = time.time()
+        
+        # Create the physics scene
+        try:
+            from pxr import UsdPhysics, PhysxSchema
+        except ImportError:
+            return error_response("UsdPhysics and PhysxSchema schemas are required for physics functionality")
+        
+        with Sdf.ChangeBlock():
+            # Create physics scene
+            scene_path = "/World/PhysicsScene"
+            physics_scene = UsdPhysics.Scene.Define(stage, scene_path)
+            
+            # Set gravity
+            physics_scene.CreateGravityDirectionAttr().Set(gravity)
+            physics_scene.CreateGravityMagnitudeAttr().Set(9.81)  # m/s²
+            
+            # Setup physics scene properties
+            physx_scene = PhysxSchema.PhysxSceneAPI.Apply(physics_scene.GetPrim())
+            physx_scene.CreateEnableCCDAttr(True)
+            physx_scene.CreateEnableStabilizationAttr(True)
+            physx_scene.CreateEnableGPUDynamicsAttr(True)
+            physx_scene.CreateBroadphaseTypeAttr("MBP")  # Multi Box Pruning
+            physx_scene.CreateSolverTypeAttr("TGS")  # Temporal Gauss Seidel
+        
+        # Mark stage as modified
+        stage_modified[abs_path] = True
+        
+        # Save stage
+        stage.GetRootLayer().Save()
+        
+        return success_response(
+            f"Successfully setup physics scene in {file_path}",
+            {
+                "stage_path": file_path,
+                "scene_path": scene_path,
+                "gravity": gravity
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error setting up physics scene: {str(e)}")
+        return error_response(f"Error setting up physics scene: {str(e)}")
+
+@mcp.tool()
+def add_rigid_body(file_path: str, prim_path: str, mass: float = 1.0, is_dynamic: bool = True) -> str:
+    """Add rigid body properties to a prim
+    
+    Args:
+        file_path: Path to the USD file
+        prim_path: Path to the prim to make a rigid body
+        mass: Mass in kg (default: 1.0)
+        is_dynamic: Whether the body is dynamic (true) or kinematic (false)
+        
+    Returns:
+        JSON string with success status and message
+    """
+    try:
+        # Validate parameters
+        if mass <= 0:
+            raise ValueError(f"Mass must be positive, got {mass}")
+        
+        abs_path = os.path.abspath(file_path)
+        # Use cached stage or open a new one
+        if abs_path in stage_cache:
+            stage = stage_cache[abs_path]
+        else:
+            if not os.path.exists(file_path):
+                return error_response(f"File not found: {file_path}")
+            
+            stage = Usd.Stage.Open(file_path)
+            if not stage:
+                return error_response(f"Failed to open stage: {file_path}")
+            
+            stage_cache[abs_path] = stage
+            stage_access_times[abs_path] = time.time()
+        
+        # Get the prim
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim:
+            return error_response(f"Prim not found: {prim_path}")
+        
+        # Apply rigid body API with physics schemas
+        try:
+            from pxr import UsdPhysics, PhysxSchema
+        except ImportError:
+            return error_response("UsdPhysics and PhysxSchema schemas are required for physics functionality")
+        
+        with Sdf.ChangeBlock():
+            # Apply rigid body API
+            rigid_body = UsdPhysics.RigidBodyAPI.Apply(prim)
+            rigid_body.CreateRigidBodyEnabledAttr(True)
+            
+            # Set dynamics type
+            if is_dynamic:
+                # Dynamic body (affected by forces, gravity)
+                rigid_body.CreateKinematicEnabledAttr(False)
+            else:
+                # Kinematic body (moved programmatically)
+                rigid_body.CreateKinematicEnabledAttr(True)
+            
+            # Set mass properties
+            mass_api = UsdPhysics.MassAPI.Apply(prim)
+            mass_api.CreateMassAttr(mass)
+            
+            # Setup collider (if prim has geometry)
+            if prim.IsA(UsdGeom.Boundable):
+                UsdPhysics.CollisionAPI.Apply(prim)
+        
+        # Mark stage as modified
+        stage_modified[abs_path] = True
+        
+        # Save stage
+        stage.GetRootLayer().Save()
+        
+        return success_response(
+            f"Successfully added {('dynamic' if is_dynamic else 'kinematic')} rigid body to {prim_path}",
+            {
+                "stage_path": file_path,
+                "prim_path": prim_path,
+                "mass": mass,
+                "is_dynamic": is_dynamic
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error adding rigid body: {str(e)}")
+        return error_response(f"Error adding rigid body: {str(e)}")
+
+@mcp.tool()
+def add_collider(file_path: str, prim_path: str, collider_type: str = "mesh", approximation: str = "none") -> str:
+    """Add a physics collider to a prim
+    
+    Args:
+        file_path: Path to the USD file
+        prim_path: Path to the prim to add the collider to
+        collider_type: Type of collider ('mesh', 'box', 'sphere', 'capsule')
+        approximation: Collision approximation ('none', 'convexHull', 'convexDecomposition')
+        
+    Returns:
+        JSON string with success status and message
+    """
+    try:
+        # Validate parameters
+        valid_types = {'mesh', 'box', 'sphere', 'capsule'}
+        if collider_type.lower() not in valid_types:
+            raise ValueError(f"Invalid collider type: {collider_type}. Must be one of {valid_types}")
+            
+        valid_approx = {'none', 'convexHull', 'convexDecomposition'}
+        if approximation.lower() not in valid_approx:
+            raise ValueError(f"Invalid approximation: {approximation}. Must be one of {valid_approx}")
+        
+        abs_path = os.path.abspath(file_path)
+        # Use cached stage or open a new one
+        if abs_path in stage_cache:
+            stage = stage_cache[abs_path]
+        else:
+            if not os.path.exists(file_path):
+                return error_response(f"File not found: {file_path}")
+            
+            stage = Usd.Stage.Open(file_path)
+            if not stage:
+                return error_response(f"Failed to open stage: {file_path}")
+            
+            stage_cache[abs_path] = stage
+            stage_access_times[abs_path] = time.time()
+        
+        # Get the prim
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim:
+            return error_response(f"Prim not found: {prim_path}")
+        
+        # Apply collision APIs with physics schemas
+        try:
+            from pxr import UsdPhysics, PhysxSchema
+        except ImportError:
+            return error_response("UsdPhysics and PhysxSchema schemas are required for physics functionality")
+        
+        with Sdf.ChangeBlock():
+            # Apply collision API
+            collision_api = UsdPhysics.CollisionAPI.Apply(prim)
+            
+            # Apply specific collider type
+            if collider_type.lower() == 'mesh':
+                mesh_collider = UsdPhysics.MeshCollisionAPI.Apply(prim)
+                
+                # Set approximation for mesh colliders
+                if approximation.lower() != 'none':
+                    physx_collision = PhysxSchema.PhysxCollisionAPI.Apply(prim)
+                    physx_collision.CreateApproximationAttr(approximation)
+                    
+            elif collider_type.lower() == 'box':
+                UsdPhysics.BoxCollisionAPI.Apply(prim)
+                
+            elif collider_type.lower() == 'sphere':
+                UsdPhysics.SphereCollisionAPI.Apply(prim)
+                
+            elif collider_type.lower() == 'capsule':
+                UsdPhysics.CapsuleCollisionAPI.Apply(prim)
+        
+        # Mark stage as modified
+        stage_modified[abs_path] = True
+        
+        # Save stage
+        stage.GetRootLayer().Save()
+        
+        return success_response(
+            f"Successfully added {collider_type} collider to {prim_path}",
+            {
+                "stage_path": file_path,
+                "prim_path": prim_path,
+                "collider_type": collider_type,
+                "approximation": approximation
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error adding collider: {str(e)}")
+        return error_response(f"Error adding collider: {str(e)}")
+
+@mcp.tool()
+def add_joint(
+    file_path: str, 
+    joint_path: str, 
+    body0_path: str, 
+    body1_path: str, 
+    joint_type: str = "fixed",
+    local_pos0: tuple = (0, 0, 0),
+    local_pos1: tuple = (0, 0, 0)
+) -> str:
+    """Add a physics joint between two rigid bodies
+    
+    Args:
+        file_path: Path to the USD file
+        joint_path: Path where to create the joint
+        body0_path: Path to the first rigid body
+        body1_path: Path to the second rigid body
+        joint_type: Type of joint ('fixed', 'revolute', 'prismatic', 'spherical')
+        local_pos0: Local position of joint in body0 space
+        local_pos1: Local position of joint in body1 space
+        
+    Returns:
+        JSON string with success status and message
+    """
+    try:
+        # Validate parameters
+        valid_types = {'fixed', 'revolute', 'prismatic', 'spherical'}
+        if joint_type.lower() not in valid_types:
+            raise ValueError(f"Invalid joint type: {joint_type}. Must be one of {valid_types}")
+        
+        abs_path = os.path.abspath(file_path)
+        # Use cached stage or open a new one
+        if abs_path in stage_cache:
+            stage = stage_cache[abs_path]
+        else:
+            if not os.path.exists(file_path):
+                return error_response(f"File not found: {file_path}")
+            
+            stage = Usd.Stage.Open(file_path)
+            if not stage:
+                return error_response(f"Failed to open stage: {file_path}")
+            
+            stage_cache[abs_path] = stage
+            stage_access_times[abs_path] = time.time()
+        
+        # Verify the bodies exist
+        body0 = stage.GetPrimAtPath(body0_path)
+        if not body0:
+            return error_response(f"Body 0 not found: {body0_path}")
+            
+        body1 = stage.GetPrimAtPath(body1_path)
+        if not body1:
+            return error_response(f"Body 1 not found: {body1_path}")
+        
+        # Create the joint using physics schemas
+        try:
+            from pxr import UsdPhysics, PhysxSchema, Gf
+        except ImportError:
+            return error_response("UsdPhysics, PhysxSchema, and Gf modules are required for physics joints")
+        
+        with Sdf.ChangeBlock():
+            joint = None
+            
+            # Create appropriate joint type
+            if joint_type.lower() == 'fixed':
+                joint = UsdPhysics.FixedJoint.Define(stage, joint_path)
+            elif joint_type.lower() == 'revolute':
+                joint = UsdPhysics.RevoluteJoint.Define(stage, joint_path)
+                # Set axis of rotation to Y by default
+                joint.CreateAxisAttr().Set(Gf.Vec3f(0, 1, 0))
+            elif joint_type.lower() == 'prismatic':
+                joint = UsdPhysics.PrismaticJoint.Define(stage, joint_path)
+                # Set axis of translation to Y by default
+                joint.CreateAxisAttr().Set(Gf.Vec3f(0, 1, 0))
+            elif joint_type.lower() == 'spherical':
+                joint = UsdPhysics.SphericalJoint.Define(stage, joint_path)
+            
+            # Set the bodies
+            joint.CreateBody0Rel().SetTargets([body0_path])
+            joint.CreateBody1Rel().SetTargets([body1_path])
+            
+            # Set local positions
+            joint.CreateLocalPos0Attr().Set(Gf.Vec3f(local_pos0))
+            joint.CreateLocalPos1Attr().Set(Gf.Vec3f(local_pos1))
+            
+            # Set basic joint properties
+            joint.CreateExcludeFromArticulationAttr(False)
+            joint.CreateCollisionEnabledAttr(False)
+        
+        # Mark stage as modified
+        stage_modified[abs_path] = True
+        
+        # Save stage
+        stage.GetRootLayer().Save()
+        
+        return success_response(
+            f"Successfully created {joint_type} joint between {body0_path} and {body1_path}",
+            {
+                "stage_path": file_path,
+                "joint_path": joint_path,
+                "joint_type": joint_type,
+                "body0": body0_path,
+                "body1": body1_path
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error creating joint: {str(e)}")
+        return error_response(f"Error creating joint: {str(e)}")
+
+# =============================================================================
+# Animation Tools
+# =============================================================================
+
+@mcp.tool()
+def set_transform(
+    file_path: str, 
+    prim_path: str, 
+    translate: Optional[tuple] = None, 
+    rotate: Optional[tuple] = None, 
+    scale: Optional[tuple] = None,
+    time_code: Optional[float] = None
+) -> str:
+    """Set or animate transform on a prim
+    
+    Args:
+        file_path: Path to the USD file
+        prim_path: Path to the prim to transform
+        translate: Optional XYZ translation values
+        rotate: Optional XYZ rotation values in degrees
+        scale: Optional XYZ scale values
+        time_code: Optional time code for animation (if None, not animated)
+        
+    Returns:
+        JSON string with success status and message
+    """
+    try:
+        # Validate input
+        if translate is None and rotate is None and scale is None:
+            raise ValueError("At least one of translate, rotate, or scale must be provided")
+        
+        abs_path = os.path.abspath(file_path)
+        # Use cached stage or open a new one
+        if abs_path in stage_cache:
+            stage = stage_cache[abs_path]
+        else:
+            if not os.path.exists(file_path):
+                return error_response(f"File not found: {file_path}")
+            
+            stage = Usd.Stage.Open(file_path)
+            if not stage:
+                return error_response(f"Failed to open stage: {file_path}")
+            
+            stage_cache[abs_path] = stage
+            stage_access_times[abs_path] = time.time()
+        
+        # Get the prim
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim:
+            return error_response(f"Prim not found: {prim_path}")
+        
+        # Need to import the Gf module for transform operations
+        try:
+            from pxr import Gf
+        except ImportError:
+            return error_response("Gf module is required for transform operations")
+        
+        # Apply the transform
+        with Sdf.ChangeBlock():
+            xform_api = UsdGeom.XformCommonAPI(prim)
+            
+            # Get existing transform
+            translate_values, rotate_values, scale_values, rotation_order = xform_api.GetXformVectors(time_code)
+            
+            # Update with provided values
+            if translate is not None:
+                translate_values = Gf.Vec3d(translate)
+            if rotate is not None:
+                rotate_values = Gf.Vec3f(rotate)
+            if scale is not None:
+                scale_values = Gf.Vec3f(scale)
+            
+            # Set the transform
+            xform_api.SetXformVectors(
+                translation=translate_values,
+                rotation=rotate_values,
+                scale=scale_values,
+                pivot=Gf.Vec3f(0, 0, 0),
+                rotOrder=UsdGeom.XformCommonAPI.RotationOrderXYZ,
+                time=time_code
+            )
+        
+        # Mark stage as modified
+        stage_modified[abs_path] = True
+        
+        # Save stage
+        stage.GetRootLayer().Save()
+        
+        transform_data = {
+            "translate": tuple(translate) if translate is not None else None,
+            "rotate": tuple(rotate) if rotate is not None else None,
+            "scale": tuple(scale) if scale is not None else None
+        }
+        
+        if time_code is not None:
+            transform_data["time_code"] = time_code
+        
+        return success_response(
+            f"Successfully set transform on {prim_path}",
+            {
+                "stage_path": file_path,
+                "prim_path": prim_path,
+                "transform": transform_data
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error setting transform: {str(e)}")
+        return error_response(f"Error setting transform: {str(e)}")
+
+@mcp.tool()
+def create_animation(
+    file_path: str, 
+    prim_path: str, 
+    attribute_name: str, 
+    key_frames: List[Dict],
+    interpolation: str = "linear"
+) -> str:
+    """Create an animation for a prim attribute with keyframes
+    
+    Args:
+        file_path: Path to the USD file
+        prim_path: Path to the prim with the attribute to animate
+        attribute_name: Name of the attribute to animate
+        key_frames: List of dictionaries with 'time' and 'value' keys
+        interpolation: Interpolation method ('linear', 'held', 'bezier')
+        
+    Returns:
+        JSON string with success status and message
+    """
+    try:
+        # Validate parameters
+        if not key_frames:
+            raise ValueError("Key frames list cannot be empty")
+            
+        valid_interpolation = {'linear', 'held', 'bezier'}
+        if interpolation.lower() not in valid_interpolation:
+            raise ValueError(f"Invalid interpolation: {interpolation}. Must be one of {valid_interpolation}")
+        
+        # Validate keyframes structure
+        for i, kf in enumerate(key_frames):
+            if 'time' not in kf or 'value' not in kf:
+                raise ValueError(f"Keyframe at index {i} missing required 'time' or 'value' field")
+        
+        abs_path = os.path.abspath(file_path)
+        # Use cached stage or open a new one
+        if abs_path in stage_cache:
+            stage = stage_cache[abs_path]
+        else:
+            if not os.path.exists(file_path):
+                return error_response(f"File not found: {file_path}")
+            
+            stage = Usd.Stage.Open(file_path)
+            if not stage:
+                return error_response(f"Failed to open stage: {file_path}")
+            
+            stage_cache[abs_path] = stage
+            stage_access_times[abs_path] = time.time()
+        
+        # Get the prim
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim:
+            return error_response(f"Prim not found: {prim_path}")
+        
+        # Get the attribute
+        attr = prim.GetAttribute(attribute_name)
+        if not attr.IsValid():
+            return error_response(f"Attribute '{attribute_name}' not found on prim {prim_path}")
+        
+        # Add keyframes
+        with Sdf.ChangeBlock():
+            # Set keyframes
+            for kf in key_frames:
+                time = kf['time']
+                value = kf['value']
+                attr.Set(value, time)
+                
+            # Set interpolation if not the default
+            if interpolation.lower() != 'linear':
+                # Import UsdRender to avoid module import errors
+                from pxr import Usd
+                
+                # Apply the interpolation
+                if interpolation.lower() == 'held':
+                    attr.SetInterpolation(Usd.InterpolationTypeHeld)
+                elif interpolation.lower() == 'bezier':
+                    attr.SetInterpolation(Usd.InterpolationTypeCubic)
+        
+        # Make sure the stage has a valid time range
+        start_time = min(kf['time'] for kf in key_frames)
+        end_time = max(kf['time'] for kf in key_frames)
+        
+        # Only update time range if needed
+        current_start = stage.GetStartTimeCode()
+        current_end = stage.GetEndTimeCode()
+        if current_start > start_time or current_start == 0:
+            stage.SetStartTimeCode(start_time)
+        if current_end < end_time:
+            stage.SetEndTimeCode(end_time)
+        
+        # Mark stage as modified
+        stage_modified[abs_path] = True
+        
+        # Save stage
+        stage.GetRootLayer().Save()
+        
+        return success_response(
+            f"Successfully created animation for {attribute_name} on {prim_path}",
+            {
+                "stage_path": file_path,
+                "prim_path": prim_path,
+                "attribute": attribute_name,
+                "num_keyframes": len(key_frames),
+                "time_range": [start_time, end_time],
+                "interpolation": interpolation
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error creating animation: {str(e)}")
+        return error_response(f"Error creating animation: {str(e)}")
+
+@mcp.tool()
+def create_skeleton(
+    file_path: str, 
+    skeleton_path: str, 
+    joint_names: List[str], 
+    joint_hierarchy: List[int],
+    rest_transforms: List[Dict]
+) -> str:
+    """Create a skeleton for rigging and animation
+    
+    Args:
+        file_path: Path to the USD file
+        skeleton_path: Path where to create the skeleton
+        joint_names: List of joint names
+        joint_hierarchy: List of parent indices (-1 for root)
+        rest_transforms: List of dictionaries with 'translate', 'rotate', and 'scale' keys
+        
+    Returns:
+        JSON string with success status and message
+    """
+    try:
+        # Validate parameters
+        if not joint_names:
+            raise ValueError("Joint names list cannot be empty")
+            
+        if len(joint_hierarchy) != len(joint_names):
+            raise ValueError("Joint hierarchy list must be the same length as joint names list")
+            
+        if len(rest_transforms) != len(joint_names):
+            raise ValueError("Rest transforms list must be the same length as joint names list")
+        
+        # Check for valid hierarchy (parents must come before children)
+        for i, parent_idx in enumerate(joint_hierarchy):
+            if parent_idx >= i:
+                raise ValueError(f"Invalid hierarchy: parent index {parent_idx} at position {i} must be less than {i} or -1 for root")
+        
+        abs_path = os.path.abspath(file_path)
+        # Use cached stage or open a new one
+        if abs_path in stage_cache:
+            stage = stage_cache[abs_path]
+        else:
+            if os.path.exists(file_path):
+                stage = Usd.Stage.Open(file_path)
+            else:
+                stage = Usd.Stage.CreateNew(file_path)
+            
+            if not stage:
+                raise StageError(f"Failed to open or create stage: {file_path}")
+            
+            stage_cache[abs_path] = stage
+            stage_access_times[abs_path] = time.time()
+        
+        # Create the skeleton with UsdSkel
+        try:
+            from pxr import UsdSkel, Gf
+        except ImportError:
+            return error_response("UsdSkel module is required for skeleton operations")
+        
+        with Sdf.ChangeBlock():
+            # Create the skeleton
+            skeleton = UsdSkel.Skeleton.Define(stage, skeleton_path)
+            
+            # Set joint names
+            skeleton.CreateJointsAttr().Set(joint_names)
+            
+            # Build bind transforms
+            bind_transforms = []
+            for transform in rest_transforms:
+                translate = transform.get('translate', (0, 0, 0))
+                rotate = transform.get('rotate', (0, 0, 0))
+                scale = transform.get('scale', (1, 1, 1))
+                
+                # Create transformation matrix
+                matrix = Gf.Matrix4d().SetTransform(
+                    Gf.Vec3d(translate),
+                    Gf.Rotation(Gf.Vec3d(1, 0, 0), rotate[0]) * 
+                    Gf.Rotation(Gf.Vec3d(0, 1, 0), rotate[1]) * 
+                    Gf.Rotation(Gf.Vec3d(0, 0, 1), rotate[2]),
+                    Gf.Vec3d(scale)
+                )
+                bind_transforms.append(matrix)
+            
+            # Set bind transforms
+            skeleton.CreateBindTransformsAttr().Set(bind_transforms)
+            
+            # Set rest transforms (same as bind transforms for setup)
+            skeleton.CreateRestTransformsAttr().Set(bind_transforms)
+            
+            # Create a topology attribute to define the hierarchy
+            skeleton.CreateTopologyAttr().Set(joint_hierarchy)
+        
+        # Mark stage as modified
+        stage_modified[abs_path] = True
+        
+        # Save stage
+        stage.GetRootLayer().Save()
+        
+        return success_response(
+            f"Successfully created skeleton with {len(joint_names)} joints at {skeleton_path}",
+            {
+                "stage_path": file_path,
+                "skeleton_path": skeleton_path,
+                "num_joints": len(joint_names),
+                "joint_names": joint_names
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error creating skeleton: {str(e)}")
+        return error_response(f"Error creating skeleton: {str(e)}")
+
+@mcp.tool()
+def bind_skeleton(file_path: str, skeleton_path: str, mesh_path: str, joint_indices: List[int], joint_weights: List[float]) -> str:
+    """Bind a skeleton to a mesh for skinning
+    
+    Args:
+        file_path: Path to the USD file
+        skeleton_path: Path to the skeleton
+        mesh_path: Path to the mesh to bind
+        joint_indices: List of joint indices for each vertex
+        joint_weights: List of joint weights for each vertex
+        
+    Returns:
+        JSON string with success status and message
+    """
+    try:
+        # Validate parameters
+        if not joint_indices:
+            raise ValueError("Joint indices list cannot be empty")
+            
+        if len(joint_weights) != len(joint_indices):
+            raise ValueError("Joint weights list must be the same length as joint indices list")
+        
+        abs_path = os.path.abspath(file_path)
+        # Use cached stage or open a new one
+        if abs_path in stage_cache:
+            stage = stage_cache[abs_path]
+        else:
+            if not os.path.exists(file_path):
+                return error_response(f"File not found: {file_path}")
+            
+            stage = Usd.Stage.Open(file_path)
+            if not stage:
+                return error_response(f"Failed to open stage: {file_path}")
+            
+            stage_cache[abs_path] = stage
+            stage_access_times[abs_path] = time.time()
+        
+        # Get the skeleton and mesh
+        skeleton_prim = stage.GetPrimAtPath(skeleton_path)
+        if not skeleton_prim:
+            return error_response(f"Skeleton not found at {skeleton_path}")
+            
+        mesh_prim = stage.GetPrimAtPath(mesh_path)
+        if not mesh_prim:
+            return error_response(f"Mesh not found at {mesh_path}")
+        
+        # Apply skin binding
+        try:
+            from pxr import UsdSkel
+        except ImportError:
+            return error_response("UsdSkel module is required for skeleton binding")
+        
+        with Sdf.ChangeBlock():
+            # Create a SkelBindingAPI on the mesh
+            binding_api = UsdSkel.BindingAPI.Apply(mesh_prim)
+            
+            # Create a skeleton relation
+            binding_api.CreateSkeletonRel().SetTargets([skeleton_path])
+            
+            # Set joint indices and weights for the binding
+            binding_api.CreateJointIndicesPrimvar(constant=False, elementSize=4).Set(joint_indices)
+            binding_api.CreateJointWeightsPrimvar(constant=False, elementSize=4).Set(joint_weights)
+            
+            # Create a geometry binding prim
+            geom_binding_path = f"{mesh_path}/SkelBinding"
+            geom_binding = UsdSkel.SkelBindingAPI.Apply(stage.DefinePrim(geom_binding_path))
+            
+            # Create a bind transform (identity)
+            from pxr import Gf
+            identity = Gf.Matrix4d().SetIdentity()
+            geom_binding.CreateBindTransformAttr().Set(identity)
+        
+        # Mark stage as modified
+        stage_modified[abs_path] = True
+        
+        # Save stage
+        stage.GetRootLayer().Save()
+        
+        return success_response(
+            f"Successfully bound skeleton {skeleton_path} to mesh {mesh_path}",
+            {
+                "stage_path": file_path,
+                "skeleton_path": skeleton_path,
+                "mesh_path": mesh_path,
+                "num_influences": len(joint_indices) // 4  # Assuming 4 weights per vertex
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error binding skeleton: {str(e)}")
+        return error_response(f"Error binding skeleton: {str(e)}")
+
+@mcp.tool()
+def create_skeletal_animation(
+    file_path: str, 
+    animation_path: str, 
+    skeleton_path: str,
+    joint_names: List[str],
+    transforms_by_time: Dict[float, List[Dict]]
+) -> str:
+    """Create a skeletal animation for a skeleton
+    
+    Args:
+        file_path: Path to the USD file
+        animation_path: Path where to create the animation
+        skeleton_path: Path to the skeleton to animate
+        joint_names: List of joint names in the skeleton
+        transforms_by_time: Dictionary of time codes to lists of transform dictionaries
+        
+    Returns:
+        JSON string with success status and message
+    """
+    try:
+        # Validate parameters
+        if not joint_names:
+            raise ValueError("Joint names list cannot be empty")
+            
+        if not transforms_by_time:
+            raise ValueError("Transforms by time dictionary cannot be empty")
+        
+        # Validate transform data structure
+        for time, transforms in transforms_by_time.items():
+            if len(transforms) != len(joint_names):
+                raise ValueError(f"Transform list at time {time} must have {len(joint_names)} elements")
+        
+        abs_path = os.path.abspath(file_path)
+        # Use cached stage or open a new one
+        if abs_path in stage_cache:
+            stage = stage_cache[abs_path]
+        else:
+            if os.path.exists(file_path):
+                stage = Usd.Stage.Open(file_path)
+            else:
+                stage = Usd.Stage.CreateNew(file_path)
+            
+            if not stage:
+                raise StageError(f"Failed to open or create stage: {file_path}")
+            
+            stage_cache[abs_path] = stage
+            stage_access_times[abs_path] = time.time()
+        
+        # Verify the skeleton exists
+        skeleton_prim = stage.GetPrimAtPath(skeleton_path)
+        if not skeleton_prim:
+            return error_response(f"Skeleton not found at {skeleton_path}")
+        
+        # Create the animation
+        try:
+            from pxr import UsdSkel, Gf
+        except ImportError:
+            return error_response("UsdSkel module is required for skeletal animation")
+        
+        with Sdf.ChangeBlock():
+            # Create the animation
+            skel_anim = UsdSkel.Animation.Define(stage, animation_path)
+            
+            # Set the joint names (must match the skeleton)
+            skel_anim.CreateJointsAttr().Set(joint_names)
+            
+            # Create the animation data
+            times = sorted(float(t) for t in transforms_by_time.keys())
+            
+            # Update stage time codes
+            start_time = min(times)
+            end_time = max(times)
+            
+            # Only update time range if needed
+            current_start = stage.GetStartTimeCode()
+            current_end = stage.GetEndTimeCode()
+            if current_start > start_time or current_start == 0:
+                stage.SetStartTimeCode(start_time)
+            if current_end < end_time:
+                stage.SetEndTimeCode(end_time)
+            
+            # Create attributes for translations, rotations, and scales
+            translations_attr = skel_anim.CreateTranslationsAttr()
+            rotations_attr = skel_anim.CreateRotationsAttr()
+            scales_attr = skel_anim.CreateScalesAttr()
+            
+            # Set keyframes
+            for time in times:
+                transforms = transforms_by_time[time]
+                
+                # Extract translations, rotations, and scales
+                translations = []
+                rotations = []
+                scales = []
+                
+                for transform in transforms:
+                    # Get transform components with defaults
+                    translate = transform.get('translate', (0, 0, 0))
+                    rotate = transform.get('rotate', (0, 0, 0))
+                    scale = transform.get('scale', (1, 1, 1))
+                    
+                    # Add to arrays
+                    translations.append(Gf.Vec3f(translate))
+                    
+                    # Convert Euler angles to quaternion
+                    rotation = Gf.Rotation(Gf.Vec3d(1, 0, 0), rotate[0]) * \
+                              Gf.Rotation(Gf.Vec3d(0, 1, 0), rotate[1]) * \
+                              Gf.Rotation(Gf.Vec3d(0, 0, 1), rotate[2])
+                    rotations.append(rotation.GetQuat())
+                    
+                    scales.append(Gf.Vec3h(scale))
+                
+                # Set the values at the current time
+                translations_attr.Set(translations, time)
+                rotations_attr.Set(rotations, time)
+                scales_attr.Set(scales, time)
+            
+            # Bind the animation to the skeleton
+            skel_binding = UsdSkel.BindingAPI.Apply(skeleton_prim)
+            skel_binding.CreateAnimationSourceRel().SetTargets([animation_path])
+        
+        # Mark stage as modified
+        stage_modified[abs_path] = True
+        
+        # Save stage
+        stage.GetRootLayer().Save()
+        
+        return success_response(
+            f"Successfully created skeletal animation at {animation_path}",
+            {
+                "stage_path": file_path,
+                "animation_path": animation_path,
+                "skeleton_path": skeleton_path,
+                "num_joints": len(joint_names),
+                "num_keyframes": len(times),
+                "time_range": [start_time, end_time]
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error creating skeletal animation: {str(e)}")
+        return error_response(f"Error creating skeletal animation: {str(e)}")
 
 # =============================================================================
 # Documentation Resources
@@ -161,6 +1740,7 @@ def get_usd_schema() -> str:
     Returns:
         JSON string containing schema information
     """
+    try:
     schema_info = {
         "UsdGeom.Xform": "Transform node that can be used for grouping and hierarchical transformations",
         "UsdGeom.Mesh": "Polygonal mesh representation",
@@ -183,6 +1763,9 @@ def get_usd_schema() -> str:
         "UsdPhysics.JointAPI": "API for joint constraints in physics"
     }
     return json.dumps(schema_info, indent=2)
+    except Exception as e:
+        logger.exception(f"Error retrieving USD schema information: {str(e)}")
+        return error_response(f"Error retrieving USD schema information: {str(e)}")
 
 @mcp.resource("omniverse://help")
 def get_omniverse_help() -> str:
@@ -611,10 +2194,6 @@ def get_omniverse_development_guide() -> str:
     """
     return guide
 
-# =============================================================================
-# Search and Utility Tools
-# =============================================================================
-
 @mcp.tool()
 def search_omniverse_guide(topic: str) -> str:
     """Search the Comprehensive Omniverse Development Guide for specific topics
@@ -647,33 +2226,208 @@ def search_omniverse_guide(topic: str) -> str:
     return "\n\n".join(matching_sections)
 
 # =============================================================================
-# Main Entry Point
+# Server Status and Management Tools
+# =============================================================================
+
+@mcp.tool()
+def get_server_status() -> str:
+    """Get the current status of the USD MCP server
+    
+    Returns:
+        JSON string with server status information
+    """
+    try:
+        # Calculate memory usage of stages
+        stage_memory = {}
+        total_stage_size = 0
+        
+        for path, stage in stage_cache.items():
+            try:
+                # Get an estimate of stage memory usage (this is approximate)
+                layer_size = os.path.getsize(stage.GetRootLayer().realPath) if os.path.exists(stage.GetRootLayer().realPath) else 0
+                num_prims = len(list(Usd.PrimRange.Stage(stage)))
+                
+                # Rough estimate of memory usage
+                memory_estimate = layer_size + (num_prims * 1024)  # 1KB per prim as a rough estimate
+                stage_memory[path] = {
+                    "size_bytes": layer_size,
+                    "num_prims": num_prims,
+                    "memory_estimate_bytes": memory_estimate,
+                    "last_accessed": stage_access_times.get(path, "unknown"),
+                    "modified": stage_modified.get(path, False)
+                }
+                total_stage_size += memory_estimate
+            except Exception as e:
+                logger.warning(f"Error calculating memory for stage {path}: {e}")
+        
+        status = {
+            "server": {
+                "name": SERVER_NAME,
+                "version": VERSION,
+                "uptime_seconds": int(time.time() - server_start_time),
+                "os": platform.system(),
+                "python_version": platform.python_version(),
+                "usd_version": getattr(Usd, "GetVersion", lambda: "unknown")()
+            },
+            "cache": {
+                "stages_cached": len(stage_cache),
+                "max_cache_size": MAX_CACHE_SIZE,
+                "total_estimated_memory_bytes": total_stage_size,
+                "cache_maintenance_interval_seconds": CACHE_MAINTENANCE_INTERVAL
+            },
+            "stages": stage_memory
+        }
+        
+        return success_response("Server status", status)
+    except Exception as e:
+        logger.exception(f"Error getting server status: {e}")
+        return error_response(f"Error getting server status: {str(e)}", "STATUS_ERROR")
+
+# =============================================================================
+# Server Startup with CLI Arguments
 # =============================================================================
 
 def parse_arguments():
-    """Parse command-line arguments"""
-    parser = argparse.ArgumentParser(description='Omniverse_USD_MCPServer_byJPH2')
-    parser.add_argument('--transport', type=str, default='stdio',
-                        choices=['stdio', 'sse'],
-                        help='Transport protocol (stdio or sse)')
-    parser.add_argument('--port', type=int, default=8000,
-                        help='Port number for SSE transport')
+    """Parse command line arguments for the server
+    
+    Returns:
+        Parsed arguments namespace
+    """
+    parser = argparse.ArgumentParser(description="USD MCP Server")
+    parser.add_argument('--host', default='127.0.0.1', help='Server host address')
+    parser.add_argument('--port', type=int, default=5000, help='Server port')
+    parser.add_argument('--protocol', default='stdio', choices=['stdio', 'http', 'sse', 'zmq'], 
+                        help='Server protocol (stdio, http, sse, or zmq)')
+    parser.add_argument('--log-level', default='INFO', 
+                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'], 
+                        help='Logging level')
     return parser.parse_args()
 
+# =============================================================================
+# Scene Graph Visualization Tools
+# =============================================================================
+
+@mcp.tool()
+def visualize_scene_graph(file_path: str, output_format: str = "text", output_path: Optional[str] = None, max_depth: int = -1, include_properties: bool = False) -> str:
+    """Visualize the scene graph of a USD stage in various formats
+    
+    Args:
+        file_path: Path to the USD stage file
+        output_format: Format for visualization ('text', 'html', 'json', or 'network')
+        output_path: Optional path for the output file
+        max_depth: Maximum depth to visualize (-1 for unlimited)
+        include_properties: Whether to include properties (for text format)
+        
+    Returns:
+        JSON string with success status, message, and visualization data
+    """
+    try:
+        # Ensure the file exists
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"File not found: {file_path}")
+            
+        # Validate format
+        if output_format not in ['text', 'html', 'json', 'network']:
+            raise ValueError(f"Invalid format: {output_format}. Must be 'text', 'html', 'json', or 'network'")
+            
+        # Import the visualizer module
+        try:
+            from scene_graph_visualizer import UsdSceneGraphVisualizer
+        except ImportError:
+            raise ImportError("Scene graph visualizer module not found. Make sure scene_graph_visualizer.py is available.")
+            
+        # Create visualizer
+        visualizer = UsdSceneGraphVisualizer(file_path, max_depth)
+        
+        # Generate output based on format
+        if output_format == "text":
+            visualization = visualizer.to_text(include_properties=include_properties)
+            result_data = {"visualization": visualization}
+            
+            # Optionally save to file
+            if output_path:
+                with open(output_path, 'w') as f:
+                    f.write(visualization)
+                result_data["output_file"] = output_path
+                
+        elif output_format == "html":
+            # Generate HTML file
+            if not output_path:
+                output_path = f"{os.path.splitext(file_path)[0]}_visualization.html"
+                
+            html_file = visualizer.to_html(output_path)
+            result_data = {
+                "output_file": html_file,
+                "file_type": "html"
+            }
+            
+        elif output_format == "json":
+            # Generate JSON file or string
+            if output_path:
+                json_file = visualizer.to_json(output_path)
+                result_data = {
+                    "output_file": json_file,
+                    "file_type": "json"
+                }
+            else:
+                json_string = visualizer.to_json()
+                result_data = {
+                    "visualization": json_string,
+                    "file_type": "json"
+                }
+                
+        elif output_format == "network":
+            # Generate network graph data
+            if not output_path:
+                output_path = f"{os.path.splitext(file_path)[0]}_network.json"
+                
+            network_data = visualizer.to_network_data(output_path)
+            result_data = {
+                "output_file": output_path,
+                "file_type": "json",
+                "node_count": len(network_data["nodes"]),
+                "link_count": len(network_data["links"])
+            }
+            
+        return success_response(
+            f"Generated {output_format} visualization for {file_path}",
+            result_data
+        )
+        
+    except Exception as e:
+        logger.exception(f"Error visualizing scene graph: {e}")
+        return error_response(f"Failed to visualize scene graph: {str(e)}", "VISUALIZATION_ERROR")
+
 if __name__ == "__main__":
-    # Parse command-line arguments
     args = parse_arguments()
     
+    # Set log level from args
+    log_level = getattr(logging, args.log_level)
+    logger.setLevel(log_level)
+    
+    logger.info(f"Starting USD MCP Server with {args.protocol} protocol")
+    
     try:
-        if args.transport == "stdio":
-            print("Starting Omniverse_USD_MCPServer_byJPH2 (stdio transport)")
+        # Start the server based on protocol
+        if args.protocol == 'stdio':
+            logger.info("Starting with stdio transport")
             mcp.start_stdio()
-        elif args.transport == "sse":
-            print(f"Starting Omniverse_USD_MCPServer_byJPH2 (SSE transport on port {args.port})")
-            mcp.start_sse(port=args.port)
+        elif args.protocol == 'http':
+            logger.info(f"Starting HTTP server on {args.host}:{args.port}")
+            mcp.start_http(host=args.host, port=args.port)
+        elif args.protocol == 'sse':
+            logger.info(f"Starting SSE server on {args.host}:{args.port}")
+            mcp.start_sse(host=args.host, port=args.port)
+        elif args.protocol == 'zmq':
+            logger.info(f"Starting ZMQ server on port {args.port}")
+            # Implement ZMQ startup here if supported by your MCP framework
+            logger.error("ZMQ protocol not yet implemented")
+            sys.exit(1)
+        else:
+            logger.error(f"Unsupported protocol: {args.protocol}")
+            sys.exit(1)
     except KeyboardInterrupt:
-        print("\nServer stopped by user")
-        sys.exit(0)
+        logger.info("Server stopped by user")
     except Exception as e:
-        print(f"Error starting server: {e}")
+        logger.exception(f"Error starting server: {e}")
         sys.exit(1)

@@ -18,9 +18,21 @@ import os
 import json
 import argparse
 import sys
+import logging
 from typing import Dict, Any, List, Optional, Tuple
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler("ai_integration.log")
+    ]
+)
+logger = logging.getLogger(__name__)
 
 class SimulatedAIAssistant:
     """Simulated AI assistant that processes queries and uses the MCP server tools.
@@ -141,7 +153,17 @@ class SimulatedAIAssistant:
         
         # Use MCP tool to create stage
         result = await self.session.call_tool("create_stage", {"file_path": file_path})
-        return f"I've created a new USD stage at {file_path}.\n\n{result.content}"
+        
+        # Parse JSON response
+        try:
+            response = json.loads(result.content)
+            if response.get("ok", False):
+                return f"I've created a new USD stage at {file_path}. {response.get('message', '')}"
+            else:
+                return f"I wasn't able to create the stage: {response.get('message', 'Unknown error')}"
+        except json.JSONDecodeError:
+            # Fallback for non-JSON responses
+            return f"I've created a new USD stage at {file_path}.\n\n{result.content}"
     
     async def _handle_add_geometry(self, query_lower: str) -> str:
         """Handle a request to add geometry to a USD stage
@@ -188,7 +210,17 @@ class SimulatedAIAssistant:
                     "face_vertex_counts": face_vertex_counts,
                     "face_vertex_indices": face_vertex_indices
                 })
-                return f"I've added a cube to the stage at {prim_path}.\n\n{result.content}"
+                
+                # Parse JSON response
+                try:
+                    response = json.loads(result.content)
+                    if response.get("ok", False):
+                        return f"I've added a cube to the stage at {prim_path}. {response.get('message', '')}"
+                    else:
+                        return f"I wasn't able to add the cube: {response.get('message', 'Unknown error')}"
+                except json.JSONDecodeError:
+                    # Fallback for non-JSON responses
+                    return f"I've added a cube to the stage at {prim_path}.\n\n{result.content}"
             else:
                 return (f"I can only create cubes right now. Other shapes like spheres "
                        f"would require additional implementation.")
@@ -203,213 +235,262 @@ class SimulatedAIAssistant:
             query_lower: Lowercase query string
             
         Returns:
-            Response message with analysis results
+            Response message
         """
         # Extract file path or use default
         file_path = "ai_created_stage.usda"
-        if "file" in query_lower:
-            parts = query_lower.split("file")
-            if len(parts) > 1:
-                potential_path = parts[1].strip().split()[0]
-                if os.path.exists(potential_path):
-                    file_path = potential_path
         
-        if os.path.exists(file_path):
-            # Use MCP tool to analyze stage
-            result = await self.session.call_tool("analyze_stage", {"file_path": file_path})
-            
-            # Parse the JSON response
+        # Check if the file exists
+        if not os.path.exists(file_path):
+            return f"I couldn't find the USD stage at {file_path}. Please create a stage first."
+        
+        # Use MCP tool to analyze stage
+        result = await self.session.call_tool("analyze_stage", {"file_path": file_path})
+        
+        # Parse JSON response
+        try:
+            response = json.loads(result.content)
+            if response.get("ok", False):
+                stage_data = response.get("data", {})
+                
+                # Format a user-friendly response
+                analysis = "Here's what I found in the USD stage:\n\n"
+                
+                if "default_prim" in stage_data:
+                    analysis += f"- Default prim: {stage_data['default_prim']}\n"
+                
+                if "up_axis" in stage_data:
+                    analysis += f"- Up axis: {stage_data['up_axis']}\n"
+                
+                if "prims" in stage_data:
+                    prim_count = len(stage_data["prims"])
+                    analysis += f"- Contains {prim_count} prims\n"
+                    
+                    # List the types of prims present
+                    prim_types = set()
+                    for prim in stage_data["prims"]:
+                        if prim.get("type"):
+                            prim_types.add(prim.get("type"))
+                    
+                    if prim_types:
+                        analysis += f"- Prim types: {', '.join(prim_types)}\n"
+                
+                return analysis
+            else:
+                return f"I wasn't able to analyze the stage: {response.get('message', 'Unknown error')}"
+        except json.JSONDecodeError:
+            # Try to parse as direct JSON (legacy format)
             try:
                 stage_info = json.loads(result.content)
-                prim_count = len(stage_info["prims"])
-                up_axis = stage_info.get("up_axis", "Unknown")
-                default_prim = stage_info.get("default_prim", "None")
+                analysis = "Here's what I found in the USD stage:\n\n"
                 
-                summary = (
-                    f"I've analyzed the USD stage at {file_path}. Here's what I found:\n\n"
-                    f"- Contains {prim_count} prims\n"
-                    f"- Up axis is {up_axis}\n"
-                    f"- Default prim: {default_prim}\n"
-                    f"- Time code range: {stage_info.get('time_code_range', ['Unknown', 'Unknown'])}\n\n"
-                    f"Would you like more detailed information about specific prims?"
-                )
-                return summary
-            except json.JSONDecodeError:
-                return f"I've analyzed the stage, but couldn't parse the results: {result.content}"
-        else:
-            return (f"I couldn't find the USD stage at {file_path}. "
-                   f"Please check the file path or create a stage first.")
+                if "default_prim" in stage_info:
+                    analysis += f"- Default prim: {stage_info['default_prim']}\n"
+                
+                if "up_axis" in stage_info:
+                    analysis += f"- Up axis: {stage_info['up_axis']}\n"
+                
+                if "prims" in stage_info:
+                    analysis += f"- Contains {len(stage_info['prims'])} prims\n"
+                
+                return analysis
+            except:
+                return f"I analyzed the stage and here are the results:\n\n{result.content}"
     
     async def _handle_omniverse_help(self) -> str:
-        """Handle a request for Omniverse help
+        """Handle a request for Omniverse help information
         
         Returns:
-            Response message with Omniverse help information
+            Response message
         """
-        # Fetch Omniverse help resource
-        help_text, _ = await self.session.read_resource("omniverse://help")
-        return f"Here's some information about Omniverse Kit and USD integration:\n\n{help_text}"
+        help_info, _ = await self.session.read_resource("omniverse://help")
+        return f"Here's some helpful information about Omniverse Kit and USD:\n\n{help_info}"
     
     async def _handle_usd_schema(self) -> str:
         """Handle a request for USD schema information
         
         Returns:
-            Response message with USD schema information
+            Response message
         """
-        # Fetch USD schema resource
         schema_info, _ = await self.session.read_resource("usd://schema")
+        
         try:
             schema_dict = json.loads(schema_info)
-            # Format a sample of schema types
-            examples = list(schema_dict.items())[:5]
-            examples_text = "\n".join([f"- {name}: {desc}" for name, desc in examples])
-            return (f"Here are some common USD schema types:\n\n{examples_text}\n\n"
-                   f"(Plus {len(schema_dict) - 5} more types. Ask me about specific types for more details.)")
-        except json.JSONDecodeError:
-            return f"Here's information about USD schema types: {schema_info}"
+            
+            # Format a user-friendly response
+            response = "Here's an overview of some common USD schema types:\n\n"
+            
+            for schema_type, description in schema_dict.items():
+                response += f"**{schema_type}**: {description}\n\n"
+            
+            return response
+        except:
+            # Fallback if parsing fails
+            return f"Here are the USD schema details:\n\n{schema_info}"
     
     async def _handle_development_guide_query(self, query_lower: str) -> str:
-        """Handle a query about the development guide
+        """Handle a request for Omniverse development guide information
         
         Args:
             query_lower: Lowercase query string
             
         Returns:
-            Response message with development guide information
+            Response message
         """
-        # Check if there's a specific topic the user is asking about
-        potential_topics = [
-            "extension", "material", "physics", "ui", "performance", 
-            "layer", "prim", "stage", "carbonite", "nucleus"
-        ]
-        matching_topics = [topic for topic in potential_topics if topic in query_lower]
+        # Extract topics from the query
+        guide_topics = []
         
-        if matching_topics:
-            # Search for specific topics in the guide
-            return await self._handle_specific_topic(matching_topics[0])
-        else:
-            # Give an overview of the development guide
-            return (
-                "The Comprehensive Omniverse Development Guide covers many topics including:\n\n"
-                "- Omniverse Kit Architecture\n"
-                "- Extension System\n"
-                "- USD Python Development\n"
-                "- UI Development\n"
-                "- Performance Optimization\n"
-                "- Networking and Collaboration\n"
-                "- Physics and Simulation\n"
-                "- Materials and Rendering\n\n"
-                "You can ask me about any of these specific topics for more detailed information."
-            )
+        if "extension" in query_lower:
+            guide_topics.append("extension")
+        if "material" in query_lower or "shader" in query_lower:
+            guide_topics.append("material")
+        if "physics" in query_lower:
+            guide_topics.append("physics")
+        if "ui" in query_lower or "interface" in query_lower:
+            guide_topics.append("ui")
+        if "performance" in query_lower or "optimization" in query_lower:
+            guide_topics.append("performance")
+        if "nucleus" in query_lower or "network" in query_lower:
+            guide_topics.append("nucleus")
+        
+        # If no specific topics were found, provide general guide
+        if not guide_topics:
+            # Get general development guide
+            guide, _ = await self.session.read_resource("omniverse://development-guide")
+            
+            # Return a preview of the guide
+            preview_length = min(500, len(guide))
+            return (f"Here's a preview of the Omniverse Development Guide:\n\n"
+                   f"{guide[:preview_length]}...\n\n"
+                   f"You can ask about specific topics like 'extensions', 'materials', 'UI', etc.")
+        
+        # Search for specific topics
+        topics_str = ", ".join(guide_topics)
+        result = await self.session.call_tool("search_omniverse_guide", {"topic": topics_str})
+        
+        return f"Here's information about {topics_str} from the Omniverse Development Guide:\n\n{result.content}"
     
     async def _handle_specific_topic(self, topic: str) -> str:
-        """Handle a query about a specific development topic
+        """Handle a request for a specific development topic
         
         Args:
-            topic: The topic to search for
+            topic: The specific topic to search for
             
         Returns:
-            Response message with topic-specific information
+            Response message
         """
+        # Search the development guide for this topic
         result = await self.session.call_tool("search_omniverse_guide", {"topic": topic})
-        return f"Here's information about {topic} in Omniverse development:\n\n{result.content}"
+        
+        return f"Here's information about {topic} development in Omniverse:\n\n{result.content}"
     
     def _get_default_response(self) -> str:
-        """Get a default response when no specific handler matches
+        """Generate a default response when no specific handler matches
         
         Returns:
             Default response message
         """
-        return (
-            "I'm your USD and Omniverse assistant. I can help with:\n\n"
-            "- Creating and manipulating USD stages\n"
-            "- Adding geometry to stages\n"
-            "- Analyzing USD files\n"
-            "- Providing information about USD schemas\n"
-            "- Offering guidance on Omniverse development\n\n"
-            "Try asking me to:\n"
-            "- 'Create a new USD stage'\n"
-            "- 'Add a cube to the stage'\n"
-            "- 'Analyze the USD stage'\n"
-            "- 'Help me with Omniverse'\n"
-            "- 'Tell me about USD schema types'\n"
-            "- 'How do I create an Omniverse extension?'\n"
-            "- 'Tell me about performance optimization in USD'"
-        )
+        return """I can help you with several USD and Omniverse tasks:
+
+1. **USD Operations**:
+   - Create a new USD stage
+   - Add a cube or other geometry
+   - Analyze a USD stage
+
+2. **Documentation**:
+   - Get information about USD schema types
+   - Access the Omniverse Development Guide
+   - Find help on specific topics (extensions, materials, physics, UI)
+
+What would you like to do?"""
+
+    def get_conversation_history(self) -> List[Dict[str, str]]:
+        """Get the full conversation history
+        
+        Returns:
+            List of message dictionaries with 'role' and 'content' keys
+        """
+        return self.conversation_history
+
 
 async def run_assistant(server_cmd='python', server_args=['usd_mcp_server.py']):
-    """Run the AI assistant with USD MCP integration
+    """Run the AI assistant with an MCP server
     
     Args:
-        server_cmd: Command to start the MCP server
+        server_cmd: Command to start the server
         server_args: Arguments for the server command
     """
-    print("Starting AI Assistant with Omniverse_USD_MCPServer_byJPH2 Integration...")
-    
-    # Connect to the MCP server
+    # Setup server parameters
     server_params = StdioServerParameters(
         command=server_cmd,
         args=server_args,
         env=None
     )
     
-    try:
-        async with stdio_client(server_params) as (read, write):
-            async with ClientSession(read, write) as session:
-                # Initialize the session
-                await session.initialize()
-                print("✓ Connected to Omniverse_USD_MCPServer_byJPH2")
-                
-                # Create the AI assistant
-                assistant = SimulatedAIAssistant(session)
-                
-                # Simple interactive chat loop
-                print("\n" + "="*80)
-                print("Omniverse_USD_MCPServer_byJPH2 AI Assistant Ready! Type 'exit' to quit.")
-                print("="*80)
-                print("\nExample queries:")
-                print("- Create a new USD stage")
-                print("- Add a cube to the stage")
-                print("- Analyze the USD stage")
-                print("- Help me with Omniverse")
-                print("- Tell me about USD schema types")
-                print("- Show me the Omniverse Development Guide")
-                print("- How do I create an Omniverse extension?")
-                print("- Tell me about performance optimization in USD")
-                print("- How do I work with materials in Omniverse?")
-                
-                while True:
-                    user_input = input("\nYou: ")
-                    if user_input.lower() in ["exit", "quit"]:
-                        print("\nThank you for using the Omniverse_USD_MCPServer_byJPH2 AI Assistant. Goodbye!")
+    # Connect to the server
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as session:
+            # Initialize session
+            await session.initialize()
+            print("✓ Connected to MCP server")
+            
+            # Create AI assistant
+            assistant = SimulatedAIAssistant(session)
+            
+            # Welcome message
+            print("\n" + "="*50)
+            print("AI Assistant for Omniverse USD")
+            print("="*50)
+            print("\nYou can ask questions about USD, Omniverse development,")
+            print("or ask the assistant to create and manipulate USD content.")
+            print("\nType 'exit' to quit.")
+            
+            # Main interaction loop
+            while True:
+                try:
+                    # Get user input
+                    user_query = input("\nYou: ")
+                    
+                    # Check for exit command
+                    if user_query.lower() in ['exit', 'quit', 'bye']:
+                        print("\nExiting assistant. Goodbye!")
                         break
                     
-                    response = await assistant.process_query(user_input)
-                    print(f"\nAssistant: {response}")
-    
-    except Exception as e:
-        print(f"Error: {e}")
-        sys.exit(1)
+                    # Process the query
+                    response = await assistant.process_query(user_query)
+                    
+                    # Display the response
+                    print("\nAssistant:", response)
+                    
+                except KeyboardInterrupt:
+                    print("\n\nInterrupted by user. Exiting...")
+                    break
+                except Exception as e:
+                    logger.exception("Error in assistant interaction")
+                    print(f"\nAn error occurred: {e}")
+                    print("Let's try again.")
+
 
 def parse_arguments():
-    """Parse command-line arguments"""
-    parser = argparse.ArgumentParser(description='Omniverse_USD_MCPServer_byJPH2 AI Assistant')
-    parser.add_argument('--server-cmd', default='python',
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(description='AI Assistant for Omniverse USD')
+    parser.add_argument('--server', default='python', 
                         help='Server command (default: python)')
-    parser.add_argument('--server-args', nargs='+', default=['usd_mcp_server.py'],
+    parser.add_argument('--args', nargs='*', default=['usd_mcp_server.py'], 
                         help='Server arguments (default: usd_mcp_server.py)')
     return parser.parse_args()
 
+
 if __name__ == "__main__":
-    # Parse command-line arguments
+    # Parse arguments
     args = parse_arguments()
     
-    # Run the AI assistant
     try:
-        asyncio.run(run_assistant(args.server_cmd, args.server_args))
+        # Run the assistant
+        asyncio.run(run_assistant(args.server, args.args))
     except KeyboardInterrupt:
-        print("\nAssistant stopped by user")
-        sys.exit(0)
+        print("\nShutting down...")
     except Exception as e:
-        print(f"Error: {e}")
+        logger.exception("Error in main")
+        print(f"Fatal error: {e}")
         sys.exit(1) 

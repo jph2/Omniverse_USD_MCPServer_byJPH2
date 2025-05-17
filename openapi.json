@@ -1,0 +1,503 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Omniverse USD MCP Server API",
+    "description": "API for the Omniverse USD Model Context Protocol Server",
+    "version": "0.2.0",
+    "contact": {
+      "name": "Jan Haluszka",
+      "url": "https://github.com/jph2/Omniverse_USD_MCPServer_byJPH2"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:5000",
+      "description": "Local development server"
+    }
+  ],
+  "paths": {
+    "/create_stage": {
+      "post": {
+        "summary": "Create a new USD stage",
+        "description": "Create a new USD stage and save it to the specified file path",
+        "operationId": "createStage",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["file_path"],
+                "properties": {
+                  "file_path": {
+                    "type": "string",
+                    "description": "Path where the USD stage should be saved"
+                  },
+                  "template": {
+                    "type": "string",
+                    "enum": ["empty", "basic", "full"],
+                    "description": "Template to use for the stage"
+                  },
+                  "up_axis": {
+                    "type": "string",
+                    "enum": ["Y", "Z"],
+                    "description": "Up axis for the stage"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Response"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analyze_stage": {
+      "post": {
+        "summary": "Analyze a USD stage",
+        "description": "Get detailed information about a USD stage and its contents",
+        "operationId": "analyzeStage",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["file_path"],
+                "properties": {
+                  "file_path": {
+                    "type": "string",
+                    "description": "Path to the USD stage file to analyze"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Response"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/create_primitive": {
+      "post": {
+        "summary": "Create a geometric primitive",
+        "description": "Create a geometric primitive (cube, sphere, cylinder, cone) in a USD stage",
+        "operationId": "createPrimitive",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["file_path", "prim_type", "prim_path"],
+                "properties": {
+                  "file_path": {
+                    "type": "string",
+                    "description": "Path to the USD stage file"
+                  },
+                  "prim_type": {
+                    "type": "string",
+                    "enum": ["cube", "sphere", "cylinder", "cone"],
+                    "description": "Type of primitive to create"
+                  },
+                  "prim_path": {
+                    "type": "string",
+                    "description": "Path for the primitive in the USD hierarchy"
+                  },
+                  "size": {
+                    "type": "number",
+                    "description": "Size or radius of the primitive"
+                  },
+                  "position": {
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    },
+                    "description": "Position as [x, y, z]"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Response"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/create_material": {
+      "post": {
+        "summary": "Create a PBR material",
+        "description": "Create a PBR material in a USD stage",
+        "operationId": "createMaterial",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["file_path", "material_path"],
+                "properties": {
+                  "file_path": {
+                    "type": "string",
+                    "description": "Path to the USD stage file"
+                  },
+                  "material_path": {
+                    "type": "string",
+                    "description": "Path for the material in the USD hierarchy"
+                  },
+                  "diffuse_color": {
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    },
+                    "description": "RGB color values as [r, g, b]"
+                  },
+                  "metallic": {
+                    "type": "number",
+                    "description": "Metallic property from 0.0 to 1.0"
+                  },
+                  "roughness": {
+                    "type": "number",
+                    "description": "Roughness property from 0.0 to 1.0"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Response"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bind_material": {
+      "post": {
+        "summary": "Bind a material to a primitive",
+        "description": "Bind a material to a primitive in a USD stage",
+        "operationId": "bindMaterial",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["file_path", "prim_path", "material_path"],
+                "properties": {
+                  "file_path": {
+                    "type": "string",
+                    "description": "Path to the USD stage file"
+                  },
+                  "prim_path": {
+                    "type": "string",
+                    "description": "Path to the primitive in the USD hierarchy"
+                  },
+                  "material_path": {
+                    "type": "string",
+                    "description": "Path to the material in the USD hierarchy"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Response"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/set_transform": {
+      "post": {
+        "summary": "Set transform properties",
+        "description": "Set transformation properties (translation, rotation, scale) for a primitive",
+        "operationId": "setTransform",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["file_path", "prim_path"],
+                "properties": {
+                  "file_path": {
+                    "type": "string",
+                    "description": "Path to the USD stage file"
+                  },
+                  "prim_path": {
+                    "type": "string",
+                    "description": "Path to the primitive in the USD hierarchy"
+                  },
+                  "translate": {
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    },
+                    "description": "Translation values as [x, y, z]"
+                  },
+                  "rotate": {
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    },
+                    "description": "Rotation values in degrees as [x, y, z]"
+                  },
+                  "scale": {
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    },
+                    "description": "Scale values as [x, y, z]"
+                  },
+                  "time_code": {
+                    "type": "number",
+                    "description": "Time code for animation"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Response"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/setup_physics_scene": {
+      "post": {
+        "summary": "Create a physics scene",
+        "description": "Create a physics scene in a USD stage",
+        "operationId": "setupPhysicsScene",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["file_path"],
+                "properties": {
+                  "file_path": {
+                    "type": "string",
+                    "description": "Path to the USD stage file"
+                  },
+                  "gravity": {
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    },
+                    "description": "Gravity vector as [x, y, z]"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Response"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/add_rigid_body": {
+      "post": {
+        "summary": "Add rigid body physics",
+        "description": "Add rigid body physics to a primitive",
+        "operationId": "addRigidBody",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["file_path", "prim_path"],
+                "properties": {
+                  "file_path": {
+                    "type": "string",
+                    "description": "Path to the USD stage file"
+                  },
+                  "prim_path": {
+                    "type": "string",
+                    "description": "Path to the primitive in the USD hierarchy"
+                  },
+                  "mass": {
+                    "type": "number",
+                    "description": "Mass of the rigid body in kg"
+                  },
+                  "is_dynamic": {
+                    "type": "boolean",
+                    "description": "Whether the body is dynamic or kinematic"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Response"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/export_to_format": {
+      "post": {
+        "summary": "Export to a different format",
+        "description": "Export a USD stage to a different format (usda, usdc, usdz)",
+        "operationId": "exportToFormat",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["file_path", "output_path"],
+                "properties": {
+                  "file_path": {
+                    "type": "string",
+                    "description": "Path to the source USD stage file"
+                  },
+                  "output_path": {
+                    "type": "string",
+                    "description": "Path where the converted file should be saved"
+                  },
+                  "format": {
+                    "type": "string",
+                    "enum": ["usda", "usdc", "usdz"],
+                    "description": "Output format for the USD stage"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Response"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/get_server_status": {
+      "get": {
+        "summary": "Get server status",
+        "description": "Get current server information and resource usage",
+        "operationId": "getServerStatus",
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Response"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Response": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "description": "Whether the operation was successful"
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable message about the operation"
+          },
+          "data": {
+            "type": "object",
+            "description": "Additional data returned by the operation"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO-formatted timestamp of when the response was generated"
+          }
+        }
+      }
+    }
+  }
+} 
