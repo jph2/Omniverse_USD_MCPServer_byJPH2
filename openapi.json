@@ -1,12 +1,11 @@
 {
-  "openapi": "3.0.3",
+  "openapi": "3.0.1",
   "info": {
     "title": "Omniverse USD MCP Server API",
-    "description": "API for the Omniverse USD Model Context Protocol Server",
-    "version": "0.2.0",
+    "description": "API for creating and manipulating USD scenes through a Model Context Protocol (MCP) server",
+    "version": "1.0.0",
     "contact": {
-      "name": "Jan Haluszka",
-      "url": "https://github.com/jph2/Omniverse_USD_MCPServer_byJPH2"
+      "name": "Project Maintainers"
     }
   },
   "servers": [
@@ -15,13 +14,41 @@
       "description": "Local development server"
     }
   ],
+  "tags": [
+    {
+      "name": "Stage Operations",
+      "description": "Operations for creating, opening, and managing USD stages"
+    },
+    {
+      "name": "Prim Operations",
+      "description": "Operations for working with USD primitives"
+    },
+    {
+      "name": "Material Operations",
+      "description": "Operations for creating and binding materials"
+    },
+    {
+      "name": "Visualization",
+      "description": "Operations for visualizing USD scenes"
+    },
+    {
+      "name": "Physics",
+      "description": "Operations for physics simulations"
+    },
+    {
+      "name": "Animation",
+      "description": "Operations for creating animations"
+    }
+  ],
   "paths": {
-    "/create_stage": {
+    "/open_stage": {
       "post": {
-        "summary": "Create a new USD stage",
-        "description": "Create a new USD stage and save it to the specified file path",
-        "operationId": "createStage",
+        "tags": ["Stage Operations"],
+        "summary": "Open or create a USD stage",
+        "description": "Open an existing USD stage or create a new one if it doesn't exist",
+        "operationId": "openStage",
         "requestBody": {
+          "description": "Stage parameters",
           "required": true,
           "content": {
             "application/json": {
@@ -31,17 +58,12 @@
                 "properties": {
                   "file_path": {
                     "type": "string",
-                    "description": "Path where the USD stage should be saved"
+                    "description": "Path to the USD file"
                   },
-                  "template": {
-                    "type": "string",
-                    "enum": ["empty", "basic", "full"],
-                    "description": "Template to use for the stage"
-                  },
-                  "up_axis": {
-                    "type": "string",
-                    "enum": ["Y", "Z"],
-                    "description": "Up axis for the stage"
+                  "createNew": {
+                    "type": "boolean",
+                    "description": "Whether to create a new stage if it doesn't exist",
+                    "default": false
                   }
                 }
               }
@@ -50,34 +72,61 @@
         },
         "responses": {
           "200": {
-            "description": "Successful operation",
+            "description": "Stage opened or created successfully",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Response"
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "description": "Whether the operation was successful"
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "Status message"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "stage_id": {
+                          "type": "string",
+                          "description": "Unique identifier for the opened stage"
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
+          },
+          "400": {
+            "description": "Invalid parameters"
+          },
+          "500": {
+            "description": "Server error"
           }
         }
       }
     },
-    "/analyze_stage": {
+    "/close_stage": {
       "post": {
-        "summary": "Analyze a USD stage",
-        "description": "Get detailed information about a USD stage and its contents",
-        "operationId": "analyzeStage",
+        "tags": ["Stage Operations"],
+        "summary": "Close a USD stage",
+        "description": "Close an open USD stage to free resources",
+        "operationId": "closeStage",
         "requestBody": {
+          "description": "Stage to close",
           "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["file_path"],
+                "required": ["stage_id"],
                 "properties": {
-                  "file_path": {
+                  "stage_id": {
                     "type": "string",
-                    "description": "Path to the USD stage file to analyze"
+                    "description": "ID of the stage to close"
                   }
                 }
               }
@@ -86,47 +135,615 @@
         },
         "responses": {
           "200": {
-            "description": "Successful operation",
+            "description": "Stage closed successfully",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Response"
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "description": "Whether the operation was successful"
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "Status message"
+                    }
+                  }
                 }
               }
             }
+          },
+          "400": {
+            "description": "Invalid parameters"
+          },
+          "404": {
+            "description": "Stage not found"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      }
+    },
+    "/save_stage": {
+      "post": {
+        "tags": ["Stage Operations"],
+        "summary": "Save a USD stage",
+        "description": "Save a USD stage to disk",
+        "operationId": "saveStage",
+        "requestBody": {
+          "description": "Stage to save",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["stage_id"],
+                "properties": {
+                  "stage_id": {
+                    "type": "string",
+                    "description": "ID of the stage to save"
+                  },
+                  "file_path": {
+                    "type": "string",
+                    "description": "Optional alternative path to save to"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stage saved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "description": "Whether the operation was successful"
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "Status message"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "file_path": {
+                          "type": "string",
+                          "description": "Path where the stage was saved"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters"
+          },
+          "404": {
+            "description": "Stage not found"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      }
+    },
+    "/list_prims": {
+      "post": {
+        "tags": ["Prim Operations"],
+        "summary": "List primitives in a stage",
+        "description": "List all primitives in a stage under a given root path",
+        "operationId": "listPrims",
+        "requestBody": {
+          "description": "List prims parameters",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["stage_id"],
+                "properties": {
+                  "stage_id": {
+                    "type": "string",
+                    "description": "ID of the stage"
+                  },
+                  "root_path": {
+                    "type": "string",
+                    "description": "Root path to list prims under",
+                    "default": "/"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "List of primitives",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "description": "Whether the operation was successful"
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "Status message"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "prims": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "List of prim paths"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters"
+          },
+          "404": {
+            "description": "Stage not found"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      }
+    },
+    "/define_prim": {
+      "post": {
+        "tags": ["Prim Operations"],
+        "summary": "Define a new prim",
+        "description": "Define a new prim of the specified type at the given path",
+        "operationId": "definePrim",
+        "requestBody": {
+          "description": "Prim parameters",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["stage_id", "path", "type"],
+                "properties": {
+                  "stage_id": {
+                    "type": "string",
+                    "description": "ID of the stage"
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "Path where the prim should be created"
+                  },
+                  "type": {
+                    "type": "string",
+                    "description": "Type of the prim (e.g., Xform, Mesh, Material)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Prim defined successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "description": "Whether the operation was successful"
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "Status message"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "prim_path": {
+                          "type": "string",
+                          "description": "Path of the defined prim"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters"
+          },
+          "404": {
+            "description": "Stage not found"
+          },
+          "500": {
+            "description": "Server error"
           }
         }
       }
     },
     "/create_primitive": {
       "post": {
+        "tags": ["Prim Operations"],
         "summary": "Create a geometric primitive",
-        "description": "Create a geometric primitive (cube, sphere, cylinder, cone) in a USD stage",
+        "description": "Create a geometric primitive (sphere, cube, etc.)",
         "operationId": "createPrimitive",
         "requestBody": {
+          "description": "Primitive parameters",
           "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["file_path", "prim_type", "prim_path"],
+                "required": ["stage_id", "primitive_type", "prim_path"],
                 "properties": {
-                  "file_path": {
+                  "stage_id": {
                     "type": "string",
-                    "description": "Path to the USD stage file"
+                    "description": "ID of the stage"
                   },
-                  "prim_type": {
+                  "primitive_type": {
                     "type": "string",
-                    "enum": ["cube", "sphere", "cylinder", "cone"],
-                    "description": "Type of primitive to create"
+                    "description": "Type of primitive",
+                    "enum": ["sphere", "cube", "cylinder", "cone"]
                   },
                   "prim_path": {
                     "type": "string",
-                    "description": "Path for the primitive in the USD hierarchy"
+                    "description": "Path where the primitive should be created"
                   },
                   "size": {
                     "type": "number",
-                    "description": "Size or radius of the primitive"
+                    "description": "Size of the primitive",
+                    "default": 1.0
+                  },
+                  "position": {
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    },
+                    "description": "Position [x, y, z]",
+                    "default": [0, 0, 0]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Primitive created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "description": "Whether the operation was successful"
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "Status message"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "prim_path": {
+                          "type": "string",
+                          "description": "Path of the created primitive"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters"
+          },
+          "404": {
+            "description": "Stage not found"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      }
+    },
+    "/create_material": {
+      "post": {
+        "tags": ["Material Operations"],
+        "summary": "Create a PBR material",
+        "description": "Create a physically-based rendering material",
+        "operationId": "createMaterial",
+        "requestBody": {
+          "description": "Material parameters",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["stage_id", "material_path"],
+                "properties": {
+                  "stage_id": {
+                    "type": "string",
+                    "description": "ID of the stage"
+                  },
+                  "material_path": {
+                    "type": "string",
+                    "description": "Path where the material should be created"
+                  },
+                  "diffuse_color": {
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    },
+                    "description": "RGB color as [r, g, b] with values from 0-1",
+                    "default": [0.8, 0.8, 0.8]
+                  },
+                  "metallic": {
+                    "type": "number",
+                    "description": "Metallic value (0-1)",
+                    "default": 0.0
+                  },
+                  "roughness": {
+                    "type": "number",
+                    "description": "Roughness value (0-1)",
+                    "default": 0.5
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Material created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "description": "Whether the operation was successful"
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "Status message"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "material_path": {
+                          "type": "string",
+                          "description": "Path of the created material"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters"
+          },
+          "404": {
+            "description": "Stage not found"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      }
+    },
+    "/bind_material": {
+      "post": {
+        "tags": ["Material Operations"],
+        "summary": "Bind a material to a prim",
+        "description": "Bind a material to a prim for rendering",
+        "operationId": "bindMaterial",
+        "requestBody": {
+          "description": "Binding parameters",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["stage_id", "material_path", "prim_path"],
+                "properties": {
+                  "stage_id": {
+                    "type": "string",
+                    "description": "ID of the stage"
+                  },
+                  "material_path": {
+                    "type": "string",
+                    "description": "Path to the material"
+                  },
+                  "prim_path": {
+                    "type": "string",
+                    "description": "Path to the prim that should receive the material"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Material bound successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "description": "Whether the operation was successful"
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "Status message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters"
+          },
+          "404": {
+            "description": "Stage, material, or prim not found"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      }
+    },
+    "/visualize_scene_graph": {
+      "post": {
+        "tags": ["Visualization"],
+        "summary": "Visualize the scene graph",
+        "description": "Generate a visualization of the USD scene graph hierarchy",
+        "operationId": "visualizeSceneGraph",
+        "requestBody": {
+          "description": "Visualization parameters",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["stage_id"],
+                "properties": {
+                  "stage_id": {
+                    "type": "string",
+                    "description": "ID of the stage"
+                  },
+                  "format": {
+                    "type": "string",
+                    "description": "Output format",
+                    "enum": ["text", "html", "json", "network"],
+                    "default": "text"
+                  },
+                  "output_path": {
+                    "type": "string",
+                    "description": "Path to save the output (required for non-text formats)"
+                  },
+                  "max_depth": {
+                    "type": "integer",
+                    "description": "Maximum depth to display"
+                  },
+                  "filter_types": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "List of prim types to include"
+                  },
+                  "theme": {
+                    "type": "string",
+                    "description": "Visual theme",
+                    "enum": ["light", "dark", "contrast"],
+                    "default": "light"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Visualization generated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "description": "Whether the operation was successful"
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "Status message"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "visualization": {
+                          "type": "string",
+                          "description": "Text visualization content (for text format)"
+                        },
+                        "output_path": {
+                          "type": "string",
+                          "description": "Path where the visualization was saved (for non-text formats)"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters"
+          },
+          "404": {
+            "description": "Stage not found"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      }
+    },
+    "/set_transform": {
+      "post": {
+        "tags": ["Prim Operations"],
+        "summary": "Set the transform of a prim",
+        "description": "Set the position, rotation, and scale of a prim",
+        "operationId": "setTransform",
+        "requestBody": {
+          "description": "Transform parameters",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["stage_id", "prim_path"],
+                "properties": {
+                  "stage_id": {
+                    "type": "string",
+                    "description": "ID of the stage"
+                  },
+                  "prim_path": {
+                    "type": "string",
+                    "description": "Path to the prim"
                   },
                   "position": {
                     "type": "array",
@@ -134,170 +751,20 @@
                       "type": "number"
                     },
                     "description": "Position as [x, y, z]"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Response"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/create_material": {
-      "post": {
-        "summary": "Create a PBR material",
-        "description": "Create a PBR material in a USD stage",
-        "operationId": "createMaterial",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": ["file_path", "material_path"],
-                "properties": {
-                  "file_path": {
-                    "type": "string",
-                    "description": "Path to the USD stage file"
                   },
-                  "material_path": {
-                    "type": "string",
-                    "description": "Path for the material in the USD hierarchy"
-                  },
-                  "diffuse_color": {
+                  "rotation": {
                     "type": "array",
                     "items": {
                       "type": "number"
                     },
-                    "description": "RGB color values as [r, g, b]"
-                  },
-                  "metallic": {
-                    "type": "number",
-                    "description": "Metallic property from 0.0 to 1.0"
-                  },
-                  "roughness": {
-                    "type": "number",
-                    "description": "Roughness property from 0.0 to 1.0"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Response"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/bind_material": {
-      "post": {
-        "summary": "Bind a material to a primitive",
-        "description": "Bind a material to a primitive in a USD stage",
-        "operationId": "bindMaterial",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": ["file_path", "prim_path", "material_path"],
-                "properties": {
-                  "file_path": {
-                    "type": "string",
-                    "description": "Path to the USD stage file"
-                  },
-                  "prim_path": {
-                    "type": "string",
-                    "description": "Path to the primitive in the USD hierarchy"
-                  },
-                  "material_path": {
-                    "type": "string",
-                    "description": "Path to the material in the USD hierarchy"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Response"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/set_transform": {
-      "post": {
-        "summary": "Set transform properties",
-        "description": "Set transformation properties (translation, rotation, scale) for a primitive",
-        "operationId": "setTransform",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": ["file_path", "prim_path"],
-                "properties": {
-                  "file_path": {
-                    "type": "string",
-                    "description": "Path to the USD stage file"
-                  },
-                  "prim_path": {
-                    "type": "string",
-                    "description": "Path to the primitive in the USD hierarchy"
-                  },
-                  "translate": {
-                    "type": "array",
-                    "items": {
-                      "type": "number"
-                    },
-                    "description": "Translation values as [x, y, z]"
-                  },
-                  "rotate": {
-                    "type": "array",
-                    "items": {
-                      "type": "number"
-                    },
-                    "description": "Rotation values in degrees as [x, y, z]"
+                    "description": "Rotation as euler angles [x, y, z] in degrees"
                   },
                   "scale": {
                     "type": "array",
                     "items": {
                       "type": "number"
                     },
-                    "description": "Scale values as [x, y, z]"
-                  },
-                  "time_code": {
-                    "type": "number",
-                    "description": "Time code for animation"
+                    "description": "Scale as [x, y, z]"
                   }
                 }
               }
@@ -306,169 +773,33 @@
         },
         "responses": {
           "200": {
-            "description": "Successful operation",
+            "description": "Transform set successfully",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Response"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/setup_physics_scene": {
-      "post": {
-        "summary": "Create a physics scene",
-        "description": "Create a physics scene in a USD stage",
-        "operationId": "setupPhysicsScene",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": ["file_path"],
-                "properties": {
-                  "file_path": {
-                    "type": "string",
-                    "description": "Path to the USD stage file"
-                  },
-                  "gravity": {
-                    "type": "array",
-                    "items": {
-                      "type": "number"
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "description": "Whether the operation was successful"
                     },
-                    "description": "Gravity vector as [x, y, z]"
+                    "message": {
+                      "type": "string",
+                      "description": "Status message"
+                    }
                   }
                 }
               }
             }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Response"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/add_rigid_body": {
-      "post": {
-        "summary": "Add rigid body physics",
-        "description": "Add rigid body physics to a primitive",
-        "operationId": "addRigidBody",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": ["file_path", "prim_path"],
-                "properties": {
-                  "file_path": {
-                    "type": "string",
-                    "description": "Path to the USD stage file"
-                  },
-                  "prim_path": {
-                    "type": "string",
-                    "description": "Path to the primitive in the USD hierarchy"
-                  },
-                  "mass": {
-                    "type": "number",
-                    "description": "Mass of the rigid body in kg"
-                  },
-                  "is_dynamic": {
-                    "type": "boolean",
-                    "description": "Whether the body is dynamic or kinematic"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Response"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/export_to_format": {
-      "post": {
-        "summary": "Export to a different format",
-        "description": "Export a USD stage to a different format (usda, usdc, usdz)",
-        "operationId": "exportToFormat",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": ["file_path", "output_path"],
-                "properties": {
-                  "file_path": {
-                    "type": "string",
-                    "description": "Path to the source USD stage file"
-                  },
-                  "output_path": {
-                    "type": "string",
-                    "description": "Path where the converted file should be saved"
-                  },
-                  "format": {
-                    "type": "string",
-                    "enum": ["usda", "usdc", "usdz"],
-                    "description": "Output format for the USD stage"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Response"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/get_server_status": {
-      "get": {
-        "summary": "Get server status",
-        "description": "Get current server information and resource usage",
-        "operationId": "getServerStatus",
-        "responses": {
-          "200": {
-            "description": "Successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Response"
-                }
-              }
-            }
+          },
+          "400": {
+            "description": "Invalid parameters"
+          },
+          "404": {
+            "description": "Stage or prim not found"
+          },
+          "500": {
+            "description": "Server error"
           }
         }
       }
@@ -476,7 +807,7 @@
   },
   "components": {
     "schemas": {
-      "Response": {
+      "ResponseWrapper": {
         "type": "object",
         "properties": {
           "ok": {
@@ -485,16 +816,11 @@
           },
           "message": {
             "type": "string",
-            "description": "Human-readable message about the operation"
+            "description": "Status message"
           },
           "data": {
             "type": "object",
-            "description": "Additional data returned by the operation"
-          },
-          "timestamp": {
-            "type": "string",
-            "format": "date-time",
-            "description": "ISO-formatted timestamp of when the response was generated"
+            "description": "Operation-specific data"
           }
         }
       }

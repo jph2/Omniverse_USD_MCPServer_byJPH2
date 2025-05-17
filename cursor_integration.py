@@ -20,426 +20,479 @@ Example:
 import requests
 import json
 import os
+import logging
 import re
 from typing import Dict, Any, Optional, List, Union, Tuple
 
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("cursor_integration")
+
 class CursorUsdTools:
-    """Provides USD tools for Cursor AI via the MCP Server"""
+    """
+    Integration class for using the Omniverse USD MCP Server from Cursor AI.
     
-    def __init__(self, host: str = "localhost", port: int = 5000):
-        """Initialize the Cursor USD tools
-        
-        Args:
-            host: MCP server host
-            port: MCP server port
+    This class provides methods for creating and manipulating USD scenes through
+    the MCP server, allowing for natural language interactions through Cursor.
+    """
+    
+    def __init__(self, server_url: str = "http://127.0.0.1:5000"):
         """
-        self.base_url = f"http://{host}:{port}"
-        self.current_stage: Optional[str] = None
-    
-    def call_tool(self, tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Call an MCP tool and return the result
+        Initialize the Cursor USD Tools.
         
         Args:
-            tool_name: Name of the MCP tool to call
-            params: Parameters for the tool
+            server_url: URL of the running MCP server (default: http://127.0.0.1:5000)
+        """
+        self.server_url = server_url
+        logger.info(f"Initialized CursorUsdTools with server URL: {server_url}")
+    
+    def _call_server(self, endpoint: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Call an MCP server endpoint.
+        
+        Args:
+            endpoint: The endpoint to call (e.g., 'open_stage')
+            data: The data to send to the endpoint
             
         Returns:
-            Tool response as a dictionary
+            The server response as a dictionary
         """
         try:
-            url = f"{self.base_url}/{tool_name}"
-            response = requests.post(url, json=params)
+            logger.debug(f"Calling endpoint {endpoint} with data: {data}")
+            response = requests.post(f"{self.server_url}/{endpoint}", json=data)
             response.raise_for_status()
             result = response.json()
-            return result
+            
+            # Handle both new and legacy response formats
+            if isinstance(result, dict) and "ok" in result:
+                if not result["ok"]:
+                    logger.error(f"Server error: {result.get('message', 'Unknown error')}")
+                return result
+            else:
+                # Legacy format - wrap in standard format
+                return {"ok": True, "data": result, "message": "Success"}
+                
+        except requests.exceptions.RequestException as e:
+            error_msg = f"Error calling MCP server: {str(e)}"
+            logger.error(error_msg)
+            return {"ok": False, "message": error_msg}
+    
+    def execute(self, natural_language_request: str) -> Dict[str, Any]:
+        """
+        Execute a natural language request through the MCP server.
+        
+        This method is the primary interface for Cursor AI to interact with
+        the MCP server using natural language.
+        
+        Args:
+            natural_language_request: A natural language request describing USD operations
+            
+        Returns:
+            The result of the operation
+        """
+        try:
+            response = self._call_server("execute_command", {
+                "command": natural_language_request
+            })
+            
+            return response
         except Exception as e:
-            return {"ok": False, "message": f"Error calling tool {tool_name}: {str(e)}"}
+            error_msg = f"Error executing natural language request: {str(e)}"
+            logger.error(error_msg)
+            return {"ok": False, "message": error_msg}
     
-    def get_server_status(self) -> Dict[str, Any]:
-        """Get current server status
-        
-        Returns:
-            Server status information
+    # Stage Operations
+    
+    def open_stage(self, file_path: str, create_new: bool = False) -> Dict[str, Any]:
         """
-        return self.call_tool("get_server_status", {})
-    
-    def create_stage(self, file_path: str, template: str = "basic", up_axis: str = "Y") -> Dict[str, Any]:
-        """Create a new USD stage
+        Open an existing USD stage or create a new one.
         
         Args:
-            file_path: Path where the stage should be saved
-            template: Stage template ('empty', 'basic', or 'full')
-            up_axis: Up axis for the stage ('Y' or 'Z')
+            file_path: Path to the USD file
+            create_new: Whether to create a new stage if it doesn't exist
             
         Returns:
-            Result of the operation
+            Dictionary containing the stage_id if successful
         """
-        result = self.call_tool("create_stage", {
+        return self._call_server("open_stage", {
             "file_path": file_path,
-            "template": template,
-            "up_axis": up_axis
+            "createNew": create_new
         })
-        
-        if result.get("ok", False):
-            self.current_stage = file_path
-        
-        return result
     
-    def create_primitive(self, file_path: str, prim_type: str, prim_path: str, 
-                         size: float = 1.0, position: Tuple[float, float, float] = (0, 0, 0)) -> Dict[str, Any]:
-        """Create a geometric primitive
+    def close_stage(self, stage_id: str) -> Dict[str, Any]:
+        """
+        Close an open USD stage to free resources.
         
         Args:
-            file_path: USD stage file path
-            prim_type: Type of primitive ('cube', 'sphere', 'cylinder', 'cone')
-            prim_path: Path for the primitive in the stage
-            size: Size of the primitive
-            position: Position (x, y, z) of the primitive
+            stage_id: ID of the stage to close
             
         Returns:
             Result of the operation
         """
-        return self.call_tool("create_primitive", {
-            "file_path": file_path,
-            "prim_type": prim_type,
+        return self._call_server("close_stage", {
+            "stage_id": stage_id
+        })
+    
+    def save_stage(self, stage_id: str, file_path: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Save a USD stage to disk.
+        
+        Args:
+            stage_id: ID of the stage to save
+            file_path: Optional alternative path to save to
+            
+        Returns:
+            Result of the operation
+        """
+        data = {"stage_id": stage_id}
+        if file_path:
+            data["file_path"] = file_path
+            
+        return self._call_server("save_stage", data)
+    
+    # Prim Operations
+    
+    def list_prims(self, stage_id: str, root_path: str = "/") -> Dict[str, Any]:
+        """
+        List all prims in a stage under a given root path.
+        
+        Args:
+            stage_id: ID of the stage
+            root_path: Root path to list prims under (default: "/")
+            
+        Returns:
+            Dictionary containing the list of prim paths
+        """
+        return self._call_server("list_prims", {
+            "stage_id": stage_id,
+            "root_path": root_path
+        })
+    
+    def define_prim(self, stage_id: str, prim_path: str, prim_type: str) -> Dict[str, Any]:
+        """
+        Define a new prim on the stage.
+        
+        Args:
+            stage_id: ID of the stage
+            prim_path: Path where the new prim should be created
+            prim_type: Type of the prim (e.g., "Xform", "Mesh", "Material")
+            
+        Returns:
+            Result of the operation
+        """
+        return self._call_server("define_prim", {
+            "stage_id": stage_id,
+            "path": prim_path,
+            "type": prim_type
+        })
+    
+    def create_primitive(self, stage_id: str, primitive_type: str, prim_path: str, 
+                        size: float = 1.0, position: List[float] = None) -> Dict[str, Any]:
+        """
+        Create a geometric primitive (sphere, cube, etc.).
+        
+        Args:
+            stage_id: ID of the stage
+            primitive_type: Type of primitive ("sphere", "cube", "cylinder", "cone")
+            prim_path: Path where the primitive should be created
+            size: Size of the primitive (default: 1.0)
+            position: Position [x, y, z] (default: [0, 0, 0])
+            
+        Returns:
+            Result of the operation
+        """
+        if position is None:
+            position = [0.0, 0.0, 0.0]
+            
+        return self._call_server("create_primitive", {
+            "stage_id": stage_id,
+            "primitive_type": primitive_type,
             "prim_path": prim_path,
             "size": size,
             "position": position
         })
     
-    def create_material(self, file_path: str, material_path: str, 
-                        diffuse_color: Tuple[float, float, float] = (0.8, 0.8, 0.8), 
-                        metallic: float = 0.0, roughness: float = 0.4) -> Dict[str, Any]:
-        """Create a material
+    # Material Operations
+    
+    def create_material(self, stage_id: str, material_path: str, diffuse_color: List[float] = None,
+                       metallic: float = 0.0, roughness: float = 0.5) -> Dict[str, Any]:
+        """
+        Create a PBR material.
         
         Args:
-            file_path: USD stage file path
-            material_path: Path for the material in the stage
-            diffuse_color: RGB diffuse color
+            stage_id: ID of the stage
+            material_path: Path where the material should be created
+            diffuse_color: RGB color as [r, g, b] with values from 0-1
             metallic: Metallic value (0-1)
             roughness: Roughness value (0-1)
             
         Returns:
             Result of the operation
         """
-        return self.call_tool("create_material", {
-            "file_path": file_path,
+        if diffuse_color is None:
+            diffuse_color = [0.8, 0.8, 0.8]
+            
+        return self._call_server("create_material", {
+            "stage_id": stage_id,
             "material_path": material_path,
             "diffuse_color": diffuse_color,
             "metallic": metallic,
             "roughness": roughness
         })
     
-    def bind_material(self, file_path: str, prim_path: str, material_path: str) -> Dict[str, Any]:
-        """Bind a material to a prim
+    def bind_material(self, stage_id: str, material_path: str, prim_path: str) -> Dict[str, Any]:
+        """
+        Bind a material to a prim.
         
         Args:
-            file_path: USD stage file path
-            prim_path: Path to the prim
+            stage_id: ID of the stage
             material_path: Path to the material
+            prim_path: Path to the prim that should receive the material
             
         Returns:
             Result of the operation
         """
-        return self.call_tool("bind_material", {
-            "file_path": file_path,
-            "prim_path": prim_path,
-            "material_path": material_path
+        return self._call_server("bind_material", {
+            "stage_id": stage_id,
+            "material_path": material_path,
+            "prim_path": prim_path
         })
     
-    def set_transform(self, file_path: str, prim_path: str, 
-                      translate: Optional[Tuple[float, float, float]] = None,
-                      rotate: Optional[Tuple[float, float, float]] = None,
-                      scale: Optional[Tuple[float, float, float]] = None,
-                      time_code: Optional[float] = None) -> Dict[str, Any]:
-        """Set transform for a prim
-        
-        Args:
-            file_path: USD stage file path
-            prim_path: Path to the prim
-            translate: Translation (x, y, z)
-            rotate: Rotation in degrees (x, y, z)
-            scale: Scale (x, y, z)
-            time_code: Time code for animation
-            
-        Returns:
-            Result of the operation
-        """
-        params = {
-            "file_path": file_path,
-            "prim_path": prim_path
-        }
-        
-        if translate is not None:
-            params["translate"] = translate
-        if rotate is not None:
-            params["rotate"] = rotate
-        if scale is not None:
-            params["scale"] = scale
-        if time_code is not None:
-            params["time_code"] = time_code
-            
-        return self.call_tool("set_transform", params)
+    # Physics Operations
     
-    def setup_physics_scene(self, file_path: str, 
-                           gravity: Tuple[float, float, float] = (0, -9.81, 0)) -> Dict[str, Any]:
-        """Set up a physics scene
+    def setup_physics_scene(self, stage_id: str, gravity: List[float] = None) -> Dict[str, Any]:
+        """
+        Set up a physics scene on the stage.
         
         Args:
-            file_path: USD stage file path
-            gravity: Gravity vector (x, y, z)
+            stage_id: ID of the stage
+            gravity: Gravity vector as [x, y, z] (default: [0, -9.81, 0])
             
         Returns:
             Result of the operation
         """
-        return self.call_tool("setup_physics_scene", {
-            "file_path": file_path,
+        if gravity is None:
+            gravity = [0.0, -9.81, 0.0]
+            
+        return self._call_server("setup_physics_scene", {
+            "stage_id": stage_id,
             "gravity": gravity
         })
     
-    def add_rigid_body(self, file_path: str, prim_path: str, 
-                      mass: float = 1.0, is_dynamic: bool = True) -> Dict[str, Any]:
-        """Add a rigid body for physics simulation
+    def add_rigid_body(self, stage_id: str, prim_path: str, mass: float = 1.0, 
+                      is_dynamic: bool = True) -> Dict[str, Any]:
+        """
+        Add rigid body physics properties to a prim.
         
         Args:
-            file_path: USD stage file path
+            stage_id: ID of the stage
             prim_path: Path to the prim
-            mass: Mass of the rigid body
-            is_dynamic: Whether the body can move
+            mass: Mass of the rigid body in kg
+            is_dynamic: Whether the body should be dynamic (vs. static)
             
         Returns:
             Result of the operation
         """
-        return self.call_tool("add_rigid_body", {
-            "file_path": file_path,
+        return self._call_server("add_rigid_body", {
+            "stage_id": stage_id,
             "prim_path": prim_path,
             "mass": mass,
             "is_dynamic": is_dynamic
         })
     
-    def create_animation(self, file_path: str, prim_path: str, attribute_name: str,
-                        key_frames: List[Dict[str, Any]], 
-                        interpolation: str = "linear") -> Dict[str, Any]:
-        """Create an animation for an attribute
+    # Animation Operations
+    
+    def set_transform(self, stage_id: str, prim_path: str, position: List[float] = None,
+                     rotation: List[float] = None, scale: List[float] = None) -> Dict[str, Any]:
+        """
+        Set the transform of a prim.
         
         Args:
-            file_path: USD stage file path
+            stage_id: ID of the stage
             prim_path: Path to the prim
-            attribute_name: Name of the attribute to animate
-            key_frames: List of key frames (each with "time" and "value")
-            interpolation: Interpolation type ("linear", "bezier", "held")
+            position: Position as [x, y, z]
+            rotation: Rotation as euler angles [x, y, z] in degrees
+            scale: Scale as [x, y, z]
             
         Returns:
             Result of the operation
         """
-        return self.call_tool("create_animation", {
-            "file_path": file_path,
-            "prim_path": prim_path,
-            "attribute_name": attribute_name,
-            "key_frames": key_frames,
-            "interpolation": interpolation
-        })
-    
-    def analyze_stage(self, file_path: str) -> Dict[str, Any]:
-        """Analyze a USD stage
-        
-        Args:
-            file_path: USD stage file path
-            
-        Returns:
-            Result of the operation with stage analysis
-        """
-        return self.call_tool("analyze_stage", {
-            "file_path": file_path
-        })
-    
-    def export_to_format(self, file_path: str, output_path: str, format: str = "usda") -> Dict[str, Any]:
-        """Export a USD stage to a different format
-        
-        Args:
-            file_path: USD stage file path
-            output_path: Output file path
-            format: Output format ('usda', 'usdc', 'usdz')
-            
-        Returns:
-            Result of the operation
-        """
-        return self.call_tool("export_to_format", {
-            "file_path": file_path,
-            "output_path": output_path,
-            "format": format
-        })
-    
-    def create_scene(self, description: str) -> Dict[str, Any]:
-        """Create a scene from a natural language description
-        
-        This method parses the description and performs the necessary operations
-        to create the described scene. This is designed to work with Cursor AI.
-        
-        Args:
-            description: Natural language description of the scene
-            
-        Returns:
-            Result of the operation
-        """
-        # Parse the description to determine what to create
-        file_path = "cursor_scene.usda"
-        
-        # Create a new stage
-        result = self.create_stage(file_path)
-        if not result.get("ok", False):
-            return result
-        
-        # Extract scene elements from the description
-        scene_elements = self._parse_scene_description(description)
-        
-        # Process each scene element
-        for element in scene_elements:
-            element_type = element.get("type")
-            
-            if element_type == "primitive":
-                # Create the primitive
-                prim_result = self.create_primitive(
-                    file_path,
-                    element.get("prim_type", "cube"),
-                    element.get("path", "/World/Geometry/Primitive"),
-                    element.get("size", 1.0),
-                    element.get("position", (0, 0, 0))
-                )
-                
-                # If material properties are specified, create and bind a material
-                if "color" in element or "metallic" in element or "roughness" in element:
-                    material_path = f"{element.get('path', '/World/Geometry/Primitive')}_material"
-                    
-                    self.create_material(
-                        file_path,
-                        material_path,
-                        element.get("color", (0.8, 0.8, 0.8)),
-                        element.get("metallic", 0.0),
-                        element.get("roughness", 0.4)
-                    )
-                    
-                    self.bind_material(file_path, element.get("path", "/World/Geometry/Primitive"), material_path)
-                
-                # If physics properties are specified, add rigid body
-                if "mass" in element:
-                    # Ensure we have a physics scene
-                    self.setup_physics_scene(file_path)
-                    
-                    self.add_rigid_body(
-                        file_path,
-                        element.get("path", "/World/Geometry/Primitive"),
-                        element.get("mass", 1.0),
-                        element.get("is_dynamic", True)
-                    )
-        
-        # Analyze the created stage
-        analysis = self.analyze_stage(file_path)
-        
-        return {
-            "ok": True,
-            "message": f"Created scene from description: {description}",
-            "file_path": file_path,
-            "analysis": analysis.get("data", {})
+        data = {
+            "stage_id": stage_id,
+            "prim_path": prim_path
         }
+        
+        if position is not None:
+            data["position"] = position
+        if rotation is not None:
+            data["rotation"] = rotation
+        if scale is not None:
+            data["scale"] = scale
+            
+        return self._call_server("set_transform", data)
     
-    def _parse_scene_description(self, description: str) -> List[Dict[str, Any]]:
-        """Parse a natural language scene description
+    def create_animation(self, stage_id: str, prim_path: str, property_path: str,
+                        keyframes: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Create an animation by setting keyframes.
         
         Args:
-            description: Natural language description of the scene
+            stage_id: ID of the stage
+            prim_path: Path to the prim to animate
+            property_path: Path to the property to animate (e.g., "xformOp:translate")
+            keyframes: List of keyframes, each with "time" and "value" keys
             
         Returns:
-            List of scene elements with their properties
+            Result of the operation
         """
-        elements = []
-        
-        # Match primitives with properties
-        primitive_types = ["cube", "sphere", "cylinder", "cone"]
-        for prim_type in primitive_types:
-            if prim_type in description.lower():
-                # Extract properties
-                element = {
-                    "type": "primitive",
-                    "prim_type": prim_type,
-                    "path": f"/World/Geometry/{prim_type.capitalize()}",
-                    "size": 1.0,
-                    "position": (0, 0, 0)
-                }
-                
-                # Check for colors
-                color_map = {
-                    "red": (1, 0, 0),
-                    "green": (0, 1, 0),
-                    "blue": (0, 0, 1),
-                    "yellow": (1, 1, 0),
-                    "cyan": (0, 1, 1),
-                    "magenta": (1, 0, 1),
-                    "white": (1, 1, 1),
-                    "black": (0, 0, 0),
-                    "gray": (0.5, 0.5, 0.5)
-                }
-                
-                for color_name, color_value in color_map.items():
-                    pattern = f"{color_name}\\s+{prim_type}"
-                    if re.search(pattern, description.lower()):
-                        element["color"] = color_value
-                
-                # Check for metallic/roughness properties
-                if "metallic" in description.lower() or "metal" in description.lower():
-                    element["metallic"] = 0.8
-                    element["roughness"] = 0.2
-                
-                # Check for physics properties
-                if "physics" in description.lower() or "rigid body" in description.lower() or "dynamic" in description.lower():
-                    element["mass"] = 1.0
-                    element["is_dynamic"] = True
-                
-                elements.append(element)
-        
-        return elements
+        return self._call_server("create_animation", {
+            "stage_id": stage_id,
+            "prim_path": prim_path,
+            "property_path": property_path,
+            "keyframes": keyframes
+        })
     
-    def visualize_scene_graph(self, file_path: str, output_format: str = "text", 
-                             output_path: Optional[str] = None, max_depth: int = -1, 
-                             include_properties: bool = False) -> Dict[str, Any]:
-        """Visualize the scene graph of a USD stage in various formats
+    # Scene Graph Visualization
+    
+    def visualize_scene_graph(self, stage_id: str, format: str = "text", 
+                            output_path: Optional[str] = None, max_depth: int = None,
+                            filter_types: List[str] = None, 
+                            theme: str = "light") -> Dict[str, Any]:
+        """
+        Generate a visualization of the USD scene graph.
         
         Args:
-            file_path: Path to the USD stage file
-            output_format: Format for visualization ('text', 'html', 'json', or 'network')
-            output_path: Optional path for the output file
-            max_depth: Maximum depth to visualize (-1 for unlimited)
-            include_properties: Whether to include properties (for text format)
+            stage_id: ID of the stage
+            format: Output format ("text", "html", "json", "network")
+            output_path: Path to save the output (required for non-text formats)
+            max_depth: Maximum depth to display (None for unlimited)
+            filter_types: List of prim types to include (None for all)
+            theme: Visual theme ("light", "dark", "contrast")
             
         Returns:
-            Visualization result data
+            Result of the operation, including visualization content or path
         """
-        params = {
-            "file_path": file_path,
-            "output_format": output_format,
-            "max_depth": max_depth,
-            "include_properties": include_properties
+        data = {
+            "stage_id": stage_id,
+            "format": format,
+            "theme": theme
         }
         
         if output_path:
-            params["output_path"] = output_path
+            data["output_path"] = output_path
+        if max_depth is not None:
+            data["max_depth"] = max_depth
+        if filter_types:
+            data["filter_types"] = filter_types
             
-        return self.call_tool("visualize_scene_graph", params)
+        return self._call_server("visualize_scene_graph", data)
 
-
-# Example usage when run directly
-if __name__ == "__main__":
-    usd_tools = CursorUsdTools()
+    # Helper methods for common operations
     
-    # Check if server is running
-    status = usd_tools.get_server_status()
-    if status.get("ok", False):
-        print("Connected to USD MCP Server")
-        print(f"Server status: {status.get('data', {})}")
+    def create_simple_scene(self, file_path: str, primitives: List[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Create a simple scene with multiple primitives and materials.
         
-        # Create a test scene
-        scene_result = usd_tools.create_scene("Create a scene with a red cube and a blue sphere")
-        print(json.dumps(scene_result, indent=2))
-    else:
-        print("Failed to connect to USD MCP Server. Make sure it's running with:")
-        print("python usd_mcp_server.py --host 0.0.0.0 --port 5000") 
+        Args:
+            file_path: Path to save the USD file
+            primitives: List of primitive specifications, each with:
+                - type: Primitive type ("sphere", "cube", etc.)
+                - path: Prim path
+                - position: [x, y, z] position
+                - size: Size of the primitive
+                - color: [r, g, b] color (optional)
+                
+        Returns:
+            Result of the operation with stage_id
+        """
+        try:
+            # Create a new stage
+            stage_result = self.open_stage(file_path, create_new=True)
+            if not stage_result["ok"]:
+                return stage_result
+                
+            stage_id = stage_result["data"]["stage_id"]
+            
+            # Create default primitives if none provided
+            if not primitives:
+                primitives = [
+                    {
+                        "type": "sphere", 
+                        "path": "/World/Sphere", 
+                        "position": [0, 1, 0], 
+                        "size": 1.0,
+                        "color": [1, 0, 0]  # Red
+                    },
+                    {
+                        "type": "cube", 
+                        "path": "/World/Cube", 
+                        "position": [2, 0, 0], 
+                        "size": 1.0,
+                        "color": [0, 0, 1]  # Blue
+                    }
+                ]
+            
+            # Create each primitive and its material
+            for i, prim in enumerate(primitives):
+                # Create the primitive
+                self.create_primitive(
+                    stage_id,
+                    prim["type"],
+                    prim["path"],
+                    prim.get("size", 1.0),
+                    prim.get("position", [0, 0, 0])
+                )
+                
+                # Create a material if color specified
+                if "color" in prim:
+                    material_path = f"/World/Materials/Material_{i}"
+                    self.create_material(
+                        stage_id,
+                        material_path,
+                        diffuse_color=prim["color"]
+                    )
+                    self.bind_material(stage_id, material_path, prim["path"])
+            
+            # Save the stage
+            self.save_stage(stage_id)
+            
+            return {
+                "ok": True, 
+                "message": "Created simple scene successfully", 
+                "data": {"stage_id": stage_id}
+            }
+            
+        except Exception as e:
+            error_msg = f"Error creating simple scene: {str(e)}"
+            logger.error(error_msg)
+            return {"ok": False, "message": error_msg}
+
+
+# Example usage if run directly
+if __name__ == "__main__":
+    tools = CursorUsdTools()
+    
+    # Example: Create a simple scene
+    result = tools.create_simple_scene(
+        file_path="cursor_demo.usda",
+        primitives=[
+            {"type": "sphere", "path": "/World/RedSphere", "position": [0, 1, 0], "color": [1, 0, 0]},
+            {"type": "cube", "path": "/World/BlueCube", "position": [2, 0, 0], "color": [0, 0, 1]},
+            {"type": "cylinder", "path": "/World/GreenCylinder", "position": [-2, 0, 0], "color": [0, 1, 0]}
+        ]
+    )
+    
+    print(f"Created scene: {result}")
+    
+    if result["ok"]:
+        stage_id = result["data"]["stage_id"]
+        
+        # Visualize the scene graph
+        viz_result = tools.visualize_scene_graph(
+            stage_id=stage_id,
+            format="html",
+            output_path="cursor_demo_scene.html",
+            theme="dark"
+        )
+        
+        print(f"Visualization: {viz_result}") 
