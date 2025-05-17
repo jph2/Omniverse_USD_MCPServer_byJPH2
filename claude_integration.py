@@ -29,7 +29,7 @@ MCP_TOOLS = [
                     "type": "string",
                     "description": "Path where the USD stage should be created or opened"
                 },
-                "createNew": {
+                "create_if_missing": {
                     "type": "boolean",
                     "description": "Whether to create a new stage if it doesn't exist"
                 }
@@ -38,7 +38,7 @@ MCP_TOOLS = [
         }
     },
     {
-        "name": "close_stage",
+        "name": "close_stage_by_id",
         "description": "Close an open USD stage to free resources.",
         "input_schema": {
             "type": "object",
@@ -46,13 +46,17 @@ MCP_TOOLS = [
                 "stage_id": {
                     "type": "string",
                     "description": "ID of the stage to close"
+                },
+                "save_if_modified": {
+                    "type": "boolean",
+                    "description": "Whether to save the stage if it has been modified"
                 }
             },
             "required": ["stage_id"]
         }
     },
     {
-        "name": "define_prim",
+        "name": "define_prim_by_id",
         "description": "Define a new prim of the specified type at the given path.",
         "input_schema": {
             "type": "object",
@@ -74,7 +78,7 @@ MCP_TOOLS = [
         }
     },
     {
-        "name": "create_primitive",
+        "name": "create_primitive_by_id",
         "description": "Create a geometric primitive (sphere, cube, etc.).",
         "input_schema": {
             "type": "object",
@@ -83,7 +87,7 @@ MCP_TOOLS = [
                     "type": "string",
                     "description": "ID of the stage"
                 },
-                "primitive_type": {
+                "prim_type": {
                     "type": "string",
                     "description": "Type of primitive (sphere, cube, cylinder, cone)",
                     "enum": ["sphere", "cube", "cylinder", "cone"]
@@ -102,11 +106,11 @@ MCP_TOOLS = [
                     "description": "Position [x, y, z]"
                 }
             },
-            "required": ["stage_id", "primitive_type", "prim_path"]
+            "required": ["stage_id", "prim_type", "prim_path"]
         }
     },
     {
-        "name": "create_material",
+        "name": "create_material_by_id",
         "description": "Create a PBR material.",
         "input_schema": {
             "type": "object",
@@ -137,7 +141,7 @@ MCP_TOOLS = [
         }
     },
     {
-        "name": "bind_material",
+        "name": "bind_material_by_id",
         "description": "Bind a material to a prim.",
         "input_schema": {
             "type": "object",
@@ -159,7 +163,7 @@ MCP_TOOLS = [
         }
     },
     {
-        "name": "visualize_scene_graph",
+        "name": "visualize_scene_graph_by_id",
         "description": "Generate a visualization of the USD scene graph.",
         "input_schema": {
             "type": "object",
@@ -168,7 +172,7 @@ MCP_TOOLS = [
                     "type": "string",
                     "description": "ID of the stage"
                 },
-                "format": {
+                "output_format": {
                     "type": "string",
                     "description": "Output format (text, html, json, network)",
                     "enum": ["text", "html", "json", "network"]
@@ -181,15 +185,69 @@ MCP_TOOLS = [
                     "type": "integer",
                     "description": "Maximum depth to display"
                 },
-                "filter_types": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "List of prim types to include"
+                "filter_type": {
+                    "type": "string",
+                    "description": "Filter to show only prims of a specific type"
                 },
                 "theme": {
                     "type": "string",
                     "description": "Visual theme (light, dark, contrast)",
                     "enum": ["light", "dark", "contrast"]
+                }
+            },
+            "required": ["stage_id"]
+        }
+    },
+    {
+        "name": "set_transform_by_id",
+        "description": "Set transform properties of a prim.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "stage_id": {
+                    "type": "string",
+                    "description": "ID of the stage"
+                },
+                "prim_path": {
+                    "type": "string",
+                    "description": "Path to the prim"
+                },
+                "translate": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "description": "Translation values as [x, y, z]"
+                },
+                "rotate": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "description": "Rotation values in degrees as [x, y, z]"
+                },
+                "scale": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "description": "Scale values as [x, y, z]"
+                },
+                "time_code": {
+                    "type": "number",
+                    "description": "Time code for animation (optional)"
+                }
+            },
+            "required": ["stage_id", "prim_path"]
+        }
+    },
+    {
+        "name": "analyze_stage_by_id",
+        "description": "Analyze a USD stage and return information about its contents.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "stage_id": {
+                    "type": "string",
+                    "description": "ID of the stage to analyze"
+                },
+                "include_attributes": {
+                    "type": "boolean",
+                    "description": "Whether to include detailed attribute information"
                 }
             },
             "required": ["stage_id"]

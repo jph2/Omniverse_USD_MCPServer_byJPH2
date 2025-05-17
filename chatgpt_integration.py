@@ -40,52 +40,68 @@ MCP_SERVER_URL = "http://localhost:5000"  # Default MCP server URL
 # Available USD tools as function definitions for OpenAI
 usd_functions = [
     {
-        "name": "create_stage",
-        "description": "Create a new USD stage at the specified file path",
+        "name": "open_stage",
+        "description": "Open an existing USD stage or create a new one, returning a unique stage ID",
         "parameters": {
             "type": "object",
             "properties": {
                 "file_path": {
                     "type": "string",
-                    "description": "Path where the USD stage should be saved"
+                    "description": "Path to the USD file to open or create"
                 },
-                "template": {
-                    "type": "string",
-                    "enum": ["empty", "basic", "full"],
-                    "description": "Template to use for the stage"
-                },
-                "up_axis": {
-                    "type": "string",
-                    "enum": ["Y", "Z"],
-                    "description": "Up axis for the stage"
+                "create_if_missing": {
+                    "type": "boolean",
+                    "description": "Whether to create a new stage if it doesn't exist"
                 }
             },
             "required": ["file_path"]
         }
     },
     {
-        "name": "analyze_stage",
+        "name": "close_stage_by_id",
+        "description": "Close a USD stage by its ID and free resources",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "stage_id": {
+                    "type": "string",
+                    "description": "ID of the stage to close"
+                },
+                "save_if_modified": {
+                    "type": "boolean",
+                    "description": "Whether to save the stage if it has been modified"
+                }
+            },
+            "required": ["stage_id"]
+        }
+    },
+    {
+        "name": "analyze_stage_by_id",
         "description": "Get detailed information about a USD stage and its contents",
         "parameters": {
             "type": "object",
             "properties": {
-                "file_path": {
+                "stage_id": {
                     "type": "string",
-                    "description": "Path to the USD stage file to analyze"
+                    "description": "ID of the stage to analyze"
+                },
+                "include_attributes": {
+                    "type": "boolean",
+                    "description": "Whether to include detailed attribute information"
                 }
             },
-            "required": ["file_path"]
+            "required": ["stage_id"]
         }
     },
     {
-        "name": "create_primitive",
+        "name": "create_primitive_by_id",
         "description": "Create a geometric primitive (cube, sphere, cylinder, cone) in a USD stage",
         "parameters": {
             "type": "object",
             "properties": {
-                "file_path": {
+                "stage_id": {
                     "type": "string",
-                    "description": "Path to the USD stage file"
+                    "description": "ID of the stage"
                 },
                 "prim_type": {
                     "type": "string",
@@ -106,18 +122,18 @@ usd_functions = [
                     "description": "Position of the primitive as [x, y, z]"
                 }
             },
-            "required": ["file_path", "prim_type", "prim_path"]
+            "required": ["stage_id", "prim_type", "prim_path"]
         }
     },
     {
-        "name": "create_material",
+        "name": "create_material_by_id",
         "description": "Create a PBR material in a USD stage",
         "parameters": {
             "type": "object",
             "properties": {
-                "file_path": {
+                "stage_id": {
                     "type": "string",
-                    "description": "Path to the USD stage file"
+                    "description": "ID of the stage"
                 },
                 "material_path": {
                     "type": "string",
@@ -137,18 +153,18 @@ usd_functions = [
                     "description": "Roughness property from 0.0 (smooth) to 1.0 (rough)"
                 }
             },
-            "required": ["file_path", "material_path"]
+            "required": ["stage_id", "material_path"]
         }
     },
     {
-        "name": "bind_material",
+        "name": "bind_material_by_id",
         "description": "Bind a material to a primitive in a USD stage",
         "parameters": {
             "type": "object",
             "properties": {
-                "file_path": {
+                "stage_id": {
                     "type": "string",
-                    "description": "Path to the USD stage file"
+                    "description": "ID of the stage"
                 },
                 "prim_path": {
                     "type": "string",
@@ -159,18 +175,18 @@ usd_functions = [
                     "description": "Path to the material in the USD hierarchy"
                 }
             },
-            "required": ["file_path", "prim_path", "material_path"]
+            "required": ["stage_id", "prim_path", "material_path"]
         }
     },
     {
-        "name": "set_transform",
+        "name": "set_transform_by_id",
         "description": "Set transformation properties (translation, rotation, scale) for a primitive",
         "parameters": {
             "type": "object",
             "properties": {
-                "file_path": {
+                "stage_id": {
                     "type": "string",
-                    "description": "Path to the USD stage file"
+                    "description": "ID of the stage"
                 },
                 "prim_path": {
                     "type": "string",
@@ -196,18 +212,18 @@ usd_functions = [
                     "description": "Time code for animation (optional)"
                 }
             },
-            "required": ["file_path", "prim_path"]
+            "required": ["stage_id", "prim_path"]
         }
     },
     {
-        "name": "setup_physics_scene",
+        "name": "setup_physics_scene_by_id",
         "description": "Create a physics scene in a USD stage",
         "parameters": {
             "type": "object",
             "properties": {
-                "file_path": {
+                "stage_id": {
                     "type": "string",
-                    "description": "Path to the USD stage file"
+                    "description": "ID of the stage"
                 },
                 "gravity": {
                     "type": "array",
@@ -215,18 +231,18 @@ usd_functions = [
                     "description": "Gravity vector as [x, y, z], typically [0, -9.81, 0]"
                 }
             },
-            "required": ["file_path"]
+            "required": ["stage_id"]
         }
     },
     {
-        "name": "add_rigid_body",
+        "name": "add_rigid_body_by_id",
         "description": "Add rigid body physics to a primitive",
         "parameters": {
             "type": "object",
             "properties": {
-                "file_path": {
+                "stage_id": {
                     "type": "string",
-                    "description": "Path to the USD stage file"
+                    "description": "ID of the stage"
                 },
                 "prim_path": {
                     "type": "string",
@@ -241,30 +257,38 @@ usd_functions = [
                     "description": "Whether the body is dynamic (true) or kinematic (false)"
                 }
             },
-            "required": ["file_path", "prim_path"]
+            "required": ["stage_id", "prim_path"]
         }
     },
     {
-        "name": "export_to_format",
-        "description": "Export a USD stage to a different format (usda, usdc, usdz)",
+        "name": "visualize_scene_graph_by_id",
+        "description": "Generate a visualization of the USD scene graph",
         "parameters": {
             "type": "object",
             "properties": {
-                "file_path": {
+                "stage_id": {
                     "type": "string",
-                    "description": "Path to the source USD stage file"
+                    "description": "ID of the stage to visualize"
+                },
+                "output_format": {
+                    "type": "string",
+                    "enum": ["text", "html", "json", "network"],
+                    "description": "Output format for the visualization"
                 },
                 "output_path": {
                     "type": "string",
-                    "description": "Path where the converted file should be saved"
+                    "description": "Path where the visualization file should be saved"
                 },
-                "format": {
+                "max_depth": {
+                    "type": "integer",
+                    "description": "Maximum depth of the hierarchy to visualize"
+                },
+                "filter_type": {
                     "type": "string",
-                    "enum": ["usda", "usdc", "usdz"],
-                    "description": "Output format for the USD stage"
+                    "description": "Filter to show only prims of a specific type"
                 }
             },
-            "required": ["file_path", "output_path"]
+            "required": ["stage_id"]
         }
     }
 ]

@@ -22,10 +22,15 @@ We have successfully implemented a two-level architecture for the USD MCP Server
 - ✅ Added `create_reference_by_id` function
 - ✅ Added `create_material_by_id` function
 - ✅ Added `bind_material_by_id` function
+- ✅ Added `setup_physics_scene_by_id` function
+- ✅ Added `add_rigid_body_by_id` function
 
 ### Client Integration
 - ✅ Updated `cursor_integration.py` to use the new stage ID-based API
 - ✅ Updated `cursor_example.py` to use `create_if_missing` instead of `create_new`
+- ✅ Updated `usd_mcp_client.py` with new stage ID-based methods
+- ✅ Updated `claude_integration.py` to use the new stage ID-based API
+- ✅ Updated `chatgpt_integration.py` to use the new stage ID-based API
 
 ### Documentation
 - ✅ Updated README.md with two-level architecture details
@@ -33,35 +38,34 @@ We have successfully implemented a two-level architecture for the USD MCP Server
 - ✅ Created LINTER_FIXES.md to document manual fixes needed
 - ✅ Updated requirements.txt with MCP dependency
 - ✅ Added notice to README.md about the refactoring
+- ✅ Created STAGE_ID_API_EXAMPLES.md with comprehensive examples
+- ✅ Created REFACTORING_SUMMARY.md documenting the progress
+- ✅ Added integrity check script to verify implementation
 
 ## Pending Tasks
 
 ### 1. Manual Linter Fixes
 The most immediate next step is to manually fix the linter errors identified in LINTER_FIXES.md:
-- [ ] Fix indentation in `create_stage` function (lines 192-212)
-- [ ] Fix indentation in `analyze_stage` function (lines 327-331)
-- [ ] Fix indentation of loops under `Sdf.ChangeBlock()` (multiple locations)
-- [ ] Fix try-except structure in `get_usd_schema` (lines 1743-1768)
+- [ ] Fix any remaining indentation issues in the main server file
 
 ### 2. Complete Level B Refactoring
 Convert the remaining USD operation functions to use stage IDs:
-- [ ] All physics-related functions (add_rigid_body_by_id, setup_physics_scene_by_id, etc.)
 - [ ] All animation-related functions (create_animation_by_id, etc.)
+- [ ] Add collision-related functions (add_collider_by_id)
+- [ ] Add joint-related functions (add_joint_by_id) 
+- [ ] Add skeleton-related functions (create_skeleton_by_id, bind_skeleton_by_id)
 
-### 3. Update the Client Examples
-- [ ] Update `claude_integration.py` and `chatgpt_integration.py` to use the new stage ID-based API
-
-### 4. Add Integration Tests
+### 3. Add Integration Tests
 - [ ] Create tests for Level A functions (stage registry)
 - [ ] Create tests for Level B functions (stage ID operations)
 - [ ] Test memory usage with large stages
 
-### 5. Performance Optimization
+### 4. Performance Optimization
 - [ ] Profile the code to identify performance bottlenecks
 - [ ] Optimize stage loading and unloading
 - [ ] Add metrics for stage operations
 
-### 6. Enhancement Ideas
+### 5. Enhancement Ideas
 - [ ] Add batch operations for multiple changes to a stage
 - [ ] Implement save points / undo stack
 - [ ] Add transaction support for atomic operations
@@ -74,10 +78,9 @@ To ensure a smooth transition to the new architecture, we recommend:
 
 1. Fix all linter errors first to ensure code quality
 2. Implement all Level B functions without removing the old ones
-3. Update client examples to use the new API
-4. Add clear deprecation warnings to the old functions
-5. Create a comprehensive migration guide for users
-6. Set a timeline for removing deprecated functions in the next major release
+3. Add clear deprecation warnings to the old functions
+4. Create a comprehensive migration guide for users
+5. Set a timeline for removing deprecated functions in the next major release
 
 ## Future Enhancements
 

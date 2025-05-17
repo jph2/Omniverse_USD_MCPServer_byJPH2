@@ -3545,6 +3545,133 @@ def bind_material_by_id(stage_id: str, prim_path: str, material_path: str) -> st
         logger.exception(f"Error binding material: {str(e)}")
         return error_response(f"Error binding material: {str(e)}")
 
+@mcp.tool()
+def setup_physics_scene_by_id(stage_id: str, gravity: tuple = (0, -9.81, 0)) -> str:
+    """Setup a physics scene in a USD stage using stage ID
+    
+    Args:
+        stage_id: ID of the stage
+        gravity: XYZ gravity vector (default: Earth gravity)
+        
+    Returns:
+        JSON string with success status and message
+    """
+    try:
+        # Validate input
+        if not stage_id:
+            raise ValueError("Stage ID cannot be empty")
+        
+        # Get the stage from registry
+        stage_registry = get_stage_registry()
+        stage = stage_registry.get_stage(stage_id)
+        if not stage:
+            return error_response(f"Stage not found with ID: {stage_id}")
+        
+        # Import physics schemas
+        from pxr import PhysxSchema, UsdPhysics
+        
+        # Create a physics scene if it doesn't already exist
+        physics_scene = None
+        root_path = "/physics_scene"
+        
+        # Check if physics scene exists
+        if stage.GetPrimAtPath(root_path):
+            physics_scene = UsdPhysics.Scene.Get(stage, root_path)
+            if not physics_scene:
+                return error_response(f"Found prim at {root_path} but it's not a UsdPhysics.Scene")
+        
+        # Create the physics scene
+        if not physics_scene:
+            physics_scene = UsdPhysics.Scene.Define(stage, root_path)
+        
+        # Set gravity
+        physics_scene.CreateGravityDirectionAttr().Set(gravity)
+        physics_scene.CreateGravityMagnitudeAttr().Set(9.81)  # Default Earth gravity
+        
+        # Mark the stage as modified
+        stage_registry.mark_as_modified(stage_id)
+        
+        return success_response(
+            f"Successfully setup physics scene in stage {stage_id}",
+            {
+                "scene_path": root_path,
+                "gravity": gravity
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error setting up physics scene: {str(e)}")
+        return error_response(f"Error setting up physics scene: {str(e)}")
+
+@mcp.tool()
+def add_rigid_body_by_id(stage_id: str, prim_path: str, mass: float = 1.0, is_dynamic: bool = True) -> str:
+    """Add rigid body physics to a prim in a USD stage using stage ID
+    
+    Args:
+        stage_id: ID of the stage
+        prim_path: Path to the prim to add rigid body to
+        mass: Mass in kg (default: 1.0)
+        is_dynamic: Whether the body is dynamic (true) or kinematic (false)
+        
+    Returns:
+        JSON string with success status and message
+    """
+    try:
+        # Validate input
+        if not stage_id:
+            raise ValueError("Stage ID cannot be empty")
+        
+        if not prim_path:
+            raise ValueError("Prim path cannot be empty")
+        
+        if mass <= 0:
+            raise ValueError(f"Mass must be positive, got {mass}")
+        
+        # Get the stage from registry
+        stage_registry = get_stage_registry()
+        stage = stage_registry.get_stage(stage_id)
+        if not stage:
+            return error_response(f"Stage not found with ID: {stage_id}")
+        
+        # Check if prim exists
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim:
+            return error_response(f"Prim not found: {prim_path}")
+        
+        # Import physics schemas
+        from pxr import PhysxSchema, UsdPhysics
+        
+        # Add rigid body properties to the prim
+        rigid_body = UsdPhysics.RigidBodyAPI.Apply(prim)
+        
+        # Set rigidBody properties
+        rigid_body.CreateRigidBodyEnabledAttr(True)
+        
+        # Set the kinematic flag (dynamic vs. kinematic)
+        rigid_body.CreateKinematicEnabledAttr(not is_dynamic)
+        
+        # Set mass properties
+        mass_api = UsdPhysics.MassAPI.Apply(prim)
+        mass_api.CreateMassAttr(mass)
+        
+        # Ensure a physics scene exists
+        if not stage.GetPrimAtPath("/physics_scene"):
+            setup_physics_scene_by_id(stage_id)
+        
+        # Mark the stage as modified
+        stage_registry.mark_as_modified(stage_id)
+        
+        return success_response(
+            f"Successfully added {'dynamic' if is_dynamic else 'kinematic'} rigid body to {prim_path}",
+            {
+                "prim_path": prim_path,
+                "mass": mass,
+                "is_dynamic": is_dynamic
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error adding rigid body: {str(e)}")
+        return error_response(f"Error adding rigid body: {str(e)}")
+
 if __name__ == "__main__":
     args = parse_arguments()
     
