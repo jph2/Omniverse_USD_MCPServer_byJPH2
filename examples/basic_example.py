@@ -4,11 +4,9 @@ Basic example of using the USD MCP Server.
 This example demonstrates the basic functionality of the USD MCP Server:
 1. Creating a new stage
 2. Adding prims to the stage
-3. Setting up physics
-4. Creating materials and applying them
-5. Creating a simple animation
-6. Visualizing the scene graph
-7. Saving the stage
+3. Creating and applying a simple mesh
+4. Examining the scene structure
+5. Saving and cleaning up resources
 """
 
 import os
@@ -38,7 +36,8 @@ async def call_and_print(client, tool, params):
                 else:
                     print(f"  {key}: {value}")
         else:
-            print(f"❌ Error: {result.get('message', '')}")
+            print(f"❌ Error: {result.get('error', '')}")
+            print(f"  Message: {result.get('message', '')}")
     else:
         print(result)
     print("-" * 30)
@@ -100,81 +99,53 @@ async def run_example():
             "prim_type": "Cube"
         })
         
-        # Step 3: Set up physics
-        print("\n3. Setting up physics...")
-        # Create a physics scene
-        await call_and_print(client, "setup_physics_scene", {
-            "stage_id": stage_id,
-            "scene_path": "/World/PhysicsScene"
-        })
-        
-        # Make the cube a rigid body
-        await call_and_print(client, "add_rigid_body", {
-            "stage_id": stage_id,
-            "prim_path": "/World/Cube",
-            "mass": 1.0,
-            "dynamic": True,
-            "initial_velocity": [0, 0, 0]
-        })
-        
-        # Add collision to the cube
-        await call_and_print(client, "add_collision", {
-            "stage_id": stage_id,
-            "prim_path": "/World/Cube",
-            "collision_type": "box",
-            "dimensions": [1.0, 1.0, 1.0]
-        })
-
-        # Step 4: Create a material and apply it
-        print("\n4. Creating and applying a material...")
-        # Create a red material
-        await call_and_print(client, "create_material", {
-            "stage_id": stage_id,
-            "material_path": "/World/Materials/RedMaterial",
-            "diffuse_color": [1.0, 0.0, 0.0],
-            "metallic": 0.1,
-            "roughness": 0.3
-        })
-        
-        # Assign the material to the cube
-        await call_and_print(client, "assign_material", {
-            "stage_id": stage_id,
-            "prim_path": "/World/Cube",
-            "material_path": "/World/Materials/RedMaterial"
-        })
-        
-        # Step 5: Create an animation
-        print("\n5. Creating an animation...")
-        # Create a simple translation animation
-        translate_keyframes = [
-            {"time": 0, "value": [0, 0, 0]},
-            {"time": 24, "value": [5, 0, 0]},
-            {"time": 48, "value": [0, 0, 0]}
+        # Step 3: Create a simple mesh
+        print("\n3. Creating a simple mesh...")
+        # Define a simple pyramid mesh
+        points = [
+            [0, 0, 0],  # base point 1
+            [1, 0, 0],  # base point 2
+            [1, 1, 0],  # base point 3
+            [0, 1, 0],  # base point 4
+            [0.5, 0.5, 1]  # top point
+        ]
+        face_vertex_counts = [4, 3, 3, 3, 3]  # base (quad) + 4 triangular sides
+        face_vertex_indices = [
+            0, 1, 2, 3,  # base (counter-clockwise)
+            0, 1, 4,     # side 1
+            1, 2, 4,     # side 2
+            2, 3, 4,     # side 3
+            3, 0, 4      # side 4
         ]
         
-        await call_and_print(client, "create_transform_animation", {
+        await call_and_print(client, "create_stage_mesh", {
             "stage_id": stage_id,
-            "prim_path": "/World/Cube",
-            "translate_keyframes": translate_keyframes,
-            "time_range": [0, 48]
+            "prim_path": "/World/Pyramid",
+            "points": points,
+            "face_vertex_counts": face_vertex_counts,
+            "face_vertex_indices": face_vertex_indices
         })
         
-        # Step 6: Visualize the scene graph
-        print("\n6. Visualizing the scene graph...")
-        viz_result = await call_and_print(client, "visualize_scene_graph", {
+        # Step 4: Examine the scene
+        print("\n4. Listing prims in the scene...")
+        await call_and_print(client, "list_stage_prims", {
             "stage_id": stage_id,
-            "format": "text"
+            "prim_path": "/World"
         })
         
-        # Save the visualization to a file
-        viz_file = os.path.join(output_dir, "scene_graph.txt")
-        with open(viz_file, "w") as f:
-            f.write(viz_result["data"]["visualization"])
-        print(f"Scene graph visualization saved to: {viz_file}")
+        # Step 5: Analyze the stage
+        print("\n5. Analyzing stage health...")
+        await call_and_print(client, "get_health", {})
         
-        # Step 7: Save the stage
-        print("\n7. Saving the stage...")
+        # Step 6: Save the stage
+        print("\n6. Saving the stage...")
         await call_and_print(client, "save_usd_stage", {
+            "stage_id": stage_id
+        })
+        
+        # Step 7: Close and cleanup
+        print("\n7. Closing the stage and cleaning up...")
+        await call_and_print(client, "close_stage", {
             "stage_id": stage_id
         })
         

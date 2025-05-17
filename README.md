@@ -4,38 +4,17 @@
 [![MCP](https://img.shields.io/badge/MCP-compatible-green)](https://docs.modelcontextprotocol.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A powerful Model Context Protocol (MCP) server for working with Universal Scene Description (USD) and NVIDIA Omniverse. This server provides a standardized API for creating, manipulating, and analyzing USD scenes programmatically.
+A Model Context Protocol (MCP) server for working with Universal Scene Description (USD) and NVIDIA Omniverse. This server provides a standardized API for basic USD operations.
 
-## Features
+## Core Features
 
-The server is organized into specialized modules that provide various USD capabilities:
+The server currently provides these core USD operations:
 
-### Core USD Operations
-- Thread-safe stage registry with lifecycle management
-- Stage creation, opening, saving, and analysis
-- Prim creation, traversal, and querying
-- Mesh creation and manipulation
-- References and layer composition
-
-### Physics
-- Physics scene setup with gravity customization
-- Rigid body simulation with dynamic/kinematic objects
-- Collision shapes (mesh, box, sphere, capsule, plane)
-- Joint system (revolute, prismatic, spherical, fixed, distance)
-
-### Materials
-- PBR material creation and binding
-- Shader parameters (diffuse, emissive, metallic, roughness, opacity)
-- Texture loading and mapping to material channels
-
-### Animation
-- Keyframe animation with interpolation types
-- Transform animation (translate, rotate, scale)
-- Timeline management and range setting
-
-### Visualization
-- Scene graph visualization in multiple formats (HTML, JSON, text)
-- Hierarchy inspection and attribute display
+- Create, open, and save USD stages
+- List and analyze stage contents
+- Create prims and define basic geometry
+- Add references to external USD files
+- Proper resource management with stage cleanup
 
 ## Installation
 
@@ -92,21 +71,13 @@ async def run_example():
             "prim_type": "Cube"
         })
         
-        # Add physics
-        await client.call_tool("setup_physics_scene", {
-            "stage_id": stage_id,
-            "scene_path": "/World/PhysicsScene"
-        })
-        
-        await client.call_tool("add_rigid_body", {
-            "stage_id": stage_id,
-            "prim_path": "/World/Cube",
-            "mass": 1.0,
-            "dynamic": True
-        })
-        
         # Save the stage
         await client.call_tool("save_usd_stage", {
+            "stage_id": stage_id
+        })
+        
+        # Close and cleanup the stage when done
+        await client.call_tool("close_stage", {
             "stage_id": stage_id
         })
         
@@ -130,96 +101,35 @@ The server supports multiple communication protocols:
 
 ## Available Tools
 
-The server provides a rich set of tools for USD operations:
+The server provides these tools for USD operations:
 
 ### Core USD Tools
 
 - `create_new_stage`: Create a new USD stage
 - `open_usd_stage`: Open an existing USD stage
 - `save_usd_stage`: Save changes to a stage
+- `close_stage`: Close and unload a stage, freeing resources
 - `list_stage_prims`: List all prims in a stage
 - `analyze_usd_stage`: Analyze stage content
 - `define_stage_prim`: Create a new prim
 - `create_stage_reference`: Create a reference to another USD file
 - `create_stage_mesh`: Create a mesh with geometry data
 
-### Physics Tools
-
-- `setup_physics_scene`: Create a physics scene
-- `add_collision`: Add collision to a prim
-- `remove_collision`: Remove collision from a prim
-- `add_rigid_body`: Make a prim a rigid body
-- `update_rigid_body`: Update rigid body properties
-- `remove_rigid_body`: Remove rigid body behavior
-- `create_joint`: Create a joint between two prims
-- `configure_joint`: Configure joint properties
-- `remove_joint`: Remove a joint
-
-### Material Tools
-
-- `create_material`: Create a new material
-- `assign_material`: Assign a material to a prim
-- `update_material`: Update material properties
-- `create_texture_material`: Create a material with a texture
-
-### Animation Tools
-
-- `set_keyframe`: Set a keyframe for an attribute
-- `create_animation`: Create animation with multiple keyframes
-- `create_transform_animation`: Create a transform animation
-
-### Visualization Tools
-
-- `visualize_scene_graph`: Generate a visualization of the scene graph
-
-### Server Management Tools
-
-- `get_health`: Get server health information
-- `get_available_tools`: Get information about available tools
-
-## Resources
-
-The server also provides additional resources:
-
-- `usd://schema`: Information about USD schema
-- `usd://help`: Help information for the server
-
-## Project Structure
-
-```
-usd_mcp_server/
-├── __init__.py           # Package initialization
-├── __main__.py           # Main entry point
-├── core/                 # Core USD operations
-│   ├── __init__.py
-│   ├── registry.py       # Thread-safe stage registry
-│   └── stage_operations.py # Basic USD operations
-├── physics/              # Physics simulation
-│   ├── __init__.py
-│   ├── setup.py          # Physics scene setup
-│   ├── collisions.py     # Collision shapes
-│   ├── rigid_bodies.py   # Rigid body dynamics
-│   └── joints.py         # Joints and constraints
-├── materials/            # Material and shader support
-│   ├── __init__.py
-│   └── shaders.py        # Material creation and binding
-├── animation/            # Animation support
-│   ├── __init__.py
-│   └── keyframes.py      # Keyframe animation
-├── visualization/        # Visualization utilities
-│   ├── __init__.py
-│   └── scene_graph.py    # Scene graph visualization
-└── tests/                # Unit tests
-    ├── __init__.py
-    └── test_basic.py     # Basic functionality tests
-```
-
 ## Example Scripts
 
 In the `examples/` directory, you'll find example scripts demonstrating how to use the server:
 
 - `basic_example.py`: Shows basic stage creation and manipulation
-- Additional examples for specific areas (physics, materials, etc.)
+
+## Future Roadmap
+
+Future releases will expand functionality to include:
+
+- Physics simulation tools
+- Material creation and management
+- Animation keyframing
+- Scene graph visualization
+- Advanced geometry operations
 
 ## Contributing
 

@@ -1,7 +1,7 @@
 """
 Main entry point for the USD MCP server.
 
-This module initializes the MCP server and registers all available tools.
+This module initializes the MCP server and registers core USD operations.
 """
 
 import os
@@ -11,43 +11,11 @@ import json
 import logging
 import threading
 import time
+import uuid
 from datetime import datetime
 
 import mcp
-
-from .core.registry import start_maintenance_threads
-from .core.stage_operations import (
-    create_stage,
-    open_stage,
-    save_stage,
-    list_prims,
-    analyze_stage,
-    define_prim,
-    create_reference,
-    create_mesh,
-    success_response,
-    error_response
-)
-
-from .physics.setup import setup_physics_scene_by_id
-from .physics.collisions import add_collision_by_id, remove_collision_by_id
-from .physics.rigid_bodies import add_rigid_body_by_id, update_rigid_body_by_id, remove_rigid_body_by_id
-from .physics.joints import create_joint_by_id, configure_joint_by_id, remove_joint_by_id
-
-from .materials.shaders import (
-    create_material_by_id,
-    assign_material_by_id,
-    update_material_by_id,
-    create_texture_material_by_id
-)
-
-from .animation.keyframes import (
-    set_keyframe_by_id,
-    create_animation_by_id,
-    create_transform_animation_by_id
-)
-
-from .visualization.scene_graph import visualize_scene_graph_by_id
+from pxr import Usd, UsdGeom, Sdf
 
 # Configure logging
 logging.basicConfig(
@@ -60,66 +28,546 @@ logger = logging.getLogger(__name__)
 # Global server start time for uptime tracking
 server_start_time = time.time()
 
+# Global stage registry (thread-safe with lock)
+stage_registry = {}  # Map of stage_id → Usd.Stage
+stage_file_paths = {}  # Map of stage_id → file_path
+stage_modified = {}  # Map of stage_id → is_modified
+registry_lock = threading.Lock()
+
+# Standard response formatting
+def success_response(message: str, data=None):
+    """Format a successful response as JSON"""
+    response = {
+        "ok": True,
+        "message": message,
+        "data": data or {},
+        "timestamp": datetime.now().isoformat()
+    }
+    return json.dumps(response)
+
+def error_response(message: str, error_code=None):
+    """Format an error response as JSON"""
+    response = {
+        "ok": False,
+        "message": message,
+        "error_code": error_code or "UNKNOWN_ERROR",
+        "data": {},
+        "timestamp": datetime.now().isoformat()
+    }
+    return json.dumps(response)
+
 # Register core tools
 @mcp.tool()
-def get_health() -> str:
-    """Get comprehensive health information about the server
+def create_new_stage(file_path: str, template: str = "empty", up_axis: str = "Y") -> str:
+    """Create a new USD stage with optional template
     
+    Args:
+        file_path: Path to save the new USD file
+        template: Template to use ('empty', 'basic')
+        up_axis: Up axis for the stage ('Y' or 'Z')
+        
     Returns:
-        JSON string with detailed health metrics
+        JSON string with stage ID or error description
     """
     try:
-        import psutil
-        import platform
+        # Create new stage
+        stage = Usd.Stage.CreateNew(file_path)
+        if not stage:
+            return error_response(f"Failed to create stage: {file_path}")
         
-        # Calculate server uptime
-        uptime_seconds = int(time.time() - server_start_time)
-        uptime_days, remainder = divmod(uptime_seconds, 86400)
-        uptime_hours, remainder = divmod(remainder, 3600)
-        uptime_minutes, uptime_seconds = divmod(remainder, 60)
-        uptime_formatted = f"{uptime_days}d {uptime_hours}h {uptime_minutes}m {uptime_seconds}s"
+        # Set up axis
+        if up_axis.upper() in ["Y", "Z"]:
+            UsdGeom.SetStageUpAxis(stage, up_axis.upper())
+        else:
+            return error_response(f"Invalid up axis: {up_axis}. Must be 'Y' or 'Z'")
         
-        # Get process information
-        process = psutil.Process()
-        memory_info = process.memory_info()
+        # Apply template
+        if template == "basic":
+            # Create a simple scene with basic elements
+            UsdGeom.Xform.Define(stage, "/World")
+            UsdGeom.Xform.Define(stage, "/World/Lights")
+            light = UsdGeom.Xform.Define(stage, "/World/Lights/MainLight")
+            
+            # Add a ground plane
+            ground = UsdGeom.Xform.Define(stage, "/World/Ground")
+            ground_mesh = UsdGeom.Mesh.Define(stage, "/World/Ground/Mesh")
+            
+            # Set default time codes
+            stage.SetStartTimeCode(1)
+            stage.SetEndTimeCode(100)
         
-        # Get stage registry information
-        from .core.registry import stage_registry
-        registry_stats = stage_registry.get_stats()
+        # Save the stage
+        stage.GetRootLayer().Save()
         
-        # Collect health metrics
-        health_data = {
-            "status": "healthy",
-            "server": {
-                "name": "USD MCP Server",
-                "version": "0.1.0",
-                "uptime_seconds": int(time.time() - server_start_time),
-                "uptime_formatted": uptime_formatted,
-                "start_time": datetime.fromtimestamp(server_start_time).isoformat()
+        # Register the stage
+        with registry_lock:
+            stage_id = str(uuid.uuid4())
+            stage_registry[stage_id] = stage
+            stage_file_paths[stage_id] = file_path
+            stage_modified[stage_id] = False
+        
+        return success_response("Stage created successfully", {
+            "stage_id": stage_id,
+            "file_path": file_path,
+            "up_axis": up_axis,
+            "template": template
+        })
+        
+    except Exception as e:
+        logger.exception(f"Error creating stage: {str(e)}")
+        return error_response(f"Error creating stage: {str(e)}")
+
+@mcp.tool()
+def open_usd_stage(file_path: str, create_if_missing: bool = False) -> str:
+    """Open an existing USD stage or create it if requested
+    
+    Args:
+        file_path: Path to the USD file to open
+        create_if_missing: Whether to create the file if it doesn't exist
+        
+    Returns:
+        JSON string with stage ID or error description
+    """
+    try:
+        # Check if file exists
+        if not os.path.exists(file_path):
+            if create_if_missing:
+                return create_new_stage(file_path)
+            else:
+                return error_response(f"File not found: {file_path}")
+        
+        # Open the stage
+        stage = Usd.Stage.Open(file_path)
+        if not stage:
+            return error_response(f"Failed to open stage: {file_path}")
+        
+        # Register the stage
+        with registry_lock:
+            stage_id = str(uuid.uuid4())
+            stage_registry[stage_id] = stage
+            stage_file_paths[stage_id] = file_path
+            stage_modified[stage_id] = False
+        
+        return success_response("Stage opened successfully", {
+            "stage_id": stage_id,
+            "file_path": file_path
+        })
+        
+    except Exception as e:
+        logger.exception(f"Error opening stage: {str(e)}")
+        return error_response(f"Error opening stage: {str(e)}")
+
+@mcp.tool()
+def save_usd_stage(stage_id: str) -> str:
+    """Save a stage if it has been modified
+    
+    Args:
+        stage_id: The ID of the stage to save
+        
+    Returns:
+        JSON string with success or error description
+    """
+    try:
+        # Get the stage
+        with registry_lock:
+            if stage_id not in stage_registry:
+                return error_response(f"Stage not found: {stage_id}")
+            
+            stage = stage_registry[stage_id]
+            is_modified = stage_modified.get(stage_id, False)
+        
+        # Save the stage if modified
+        if is_modified:
+            stage.GetRootLayer().Save()
+            
+            with registry_lock:
+                stage_modified[stage_id] = False
+            
+            return success_response("Stage saved successfully", {
+                "stage_id": stage_id,
+                "file_path": stage_file_paths.get(stage_id)
+            })
+        else:
+            return success_response("Stage not modified, no save required", {
+                "stage_id": stage_id,
+                "file_path": stage_file_paths.get(stage_id)
+            })
+        
+    except Exception as e:
+        logger.exception(f"Error saving stage: {str(e)}")
+        return error_response(f"Error saving stage: {str(e)}")
+
+@mcp.tool()
+def close_stage(stage_id: str, save_if_modified: bool = True) -> str:
+    """Close and unload a stage, freeing resources
+    
+    Args:
+        stage_id: The ID of the stage to close
+        save_if_modified: Whether to save the stage if it has been modified
+        
+    Returns:
+        JSON string with success or error description
+    """
+    try:
+        with registry_lock:
+            if stage_id not in stage_registry:
+                return error_response(f"Stage not found: {stage_id}")
+            
+            stage = stage_registry[stage_id]
+            is_modified = stage_modified.get(stage_id, False)
+            file_path = stage_file_paths.get(stage_id)
+        
+        # Save if modified and requested
+        if save_if_modified and is_modified:
+            try:
+                stage.GetRootLayer().Save()
+            except Exception as e:
+                logger.warning(f"Error saving stage during close: {str(e)}")
+        
+        # Unload stage
+        stage.Unload()
+        
+        # Remove from registry
+        with registry_lock:
+            del stage_registry[stage_id]
+            if stage_id in stage_file_paths:
+                del stage_file_paths[stage_id]
+            if stage_id in stage_modified:
+                del stage_modified[stage_id]
+        
+        return success_response("Stage closed successfully", {
+            "stage_id": stage_id,
+            "file_path": file_path
+        })
+        
+    except Exception as e:
+        logger.exception(f"Error closing stage: {str(e)}")
+        return error_response(f"Error closing stage: {str(e)}")
+
+@mcp.tool()
+def list_stage_prims(stage_id: str, prim_path: str = "/") -> str:
+    """List all prims under a given path in the stage
+    
+    Args:
+        stage_id: The ID of the stage to query
+        prim_path: The path to start listing prims from
+        
+    Returns:
+        JSON string with list of prims or error description
+    """
+    try:
+        # Get the stage
+        with registry_lock:
+            if stage_id not in stage_registry:
+                return error_response(f"Stage not found: {stage_id}")
+            
+            stage = stage_registry[stage_id]
+        
+        # Get the root prim
+        root_prim = stage.GetPrimAtPath(prim_path)
+        if not root_prim.IsValid():
+            return error_response(f"Invalid prim path: {prim_path}")
+        
+        # Get all prims under the root
+        prims = []
+        for prim in Usd.PrimRange(root_prim):
+            prim_data = {
+                "path": str(prim.GetPath()),
+                "type": str(prim.GetTypeName()),
+                "active": prim.IsActive(),
+                "defined": prim.IsDefined(),
+                "has_children": len(list(prim.GetChildren())) > 0
+            }
+            prims.append(prim_data)
+        
+        return success_response("Prims retrieved successfully", {
+            "stage_id": stage_id,
+            "root_path": prim_path,
+            "prims": prims
+        })
+        
+    except Exception as e:
+        logger.exception(f"Error listing prims: {str(e)}")
+        return error_response(f"Error listing prims: {str(e)}")
+
+@mcp.tool()
+def analyze_usd_stage(file_path: str) -> str:
+    """Analyze a USD stage and return information about its contents
+    
+    Args:
+        file_path: Path to the USD file to analyze
+        
+    Returns:
+        JSON string containing stage information or error description
+    """
+    try:
+        # Check if file exists
+        if not os.path.exists(file_path):
+            return error_response(f"File not found: {file_path}")
+        
+        # Open the stage
+        stage = Usd.Stage.Open(file_path)
+        if not stage:
+            return error_response(f"Failed to open stage: {file_path}")
+        
+        # Get stage metadata
+        root_layer = stage.GetRootLayer()
+        up_axis = UsdGeom.GetStageUpAxis(stage)
+        
+        # Count prims by type
+        prim_counts = {}
+        total_prims = 0
+        max_depth = 0
+        
+        for prim in Usd.PrimRange(stage.GetPseudoRoot()):
+            # Skip pseudo root
+            if prim.GetPath() == Sdf.Path.absoluteRootPath:
+                continue
+                
+            # Count by type
+            prim_type = str(prim.GetTypeName()) or "undefined"
+            prim_counts[prim_type] = prim_counts.get(prim_type, 0) + 1
+            total_prims += 1
+            
+            # Track max depth
+            depth = len(str(prim.GetPath()).split('/')) - 1
+            max_depth = max(max_depth, depth)
+        
+        # Get time codes
+        start_time = stage.GetStartTimeCode()
+        end_time = stage.GetEndTimeCode()
+        
+        # Get layers
+        layer_info = []
+        for layer in stage.GetLayerStack():
+            layer_info.append({
+                "identifier": layer.identifier,
+                "path": layer.realPath,
+                "anonymous": layer.anonymous
+            })
+        
+        # Collect analysis
+        analysis = {
+            "file_path": file_path,
+            "file_size_bytes": os.path.getsize(file_path),
+            "up_axis": str(up_axis),
+            "total_prims": total_prims,
+            "max_depth": max_depth,
+            "prim_types": prim_counts,
+            "time_range": {
+                "start": start_time,
+                "end": end_time,
+                "has_animation": start_time != end_time and stage.HasAuthoredTimeCodeRange()
             },
-            "system": {
-                "platform": platform.platform(),
-                "python_version": platform.python_version(),
-                "cpu_count": os.cpu_count(),
-                "cpu_percent": psutil.cpu_percent(interval=0.1),
-                "memory_percent": psutil.virtual_memory().percent
-            },
-            "process": {
-                "pid": process.pid,
-                "memory_usage_mb": memory_info.rss / 1024 / 1024,
-                "threads": process.num_threads()
-            },
-            "stages": registry_stats
+            "layers": layer_info
         }
         
-        return success_response("Server health information", health_data)
+        return success_response("Stage analyzed successfully", analysis)
+        
     except Exception as e:
-        logger.exception(f"Error getting server health: {str(e)}")
-        return error_response(f"Error getting server health: {str(e)}")
+        logger.exception(f"Error analyzing stage: {str(e)}")
+        return error_response(f"Error analyzing stage: {str(e)}")
+
+@mcp.tool()
+def define_stage_prim(stage_id: str, prim_path: str, prim_type: str = "Xform") -> str:
+    """Define a new prim on the stage
+    
+    Args:
+        stage_id: The ID of the stage to modify
+        prim_path: The path where the new prim should be created
+        prim_type: The type of prim to create (Xform, Mesh, Sphere, etc.)
+        
+    Returns:
+        JSON string with success or error description
+    """
+    try:
+        # Get the stage
+        with registry_lock:
+            if stage_id not in stage_registry:
+                return error_response(f"Stage not found: {stage_id}")
+            
+            stage = stage_registry[stage_id]
+        
+        # Create the prim based on type
+        prim = None
+        
+        if prim_type == "Xform":
+            prim = UsdGeom.Xform.Define(stage, prim_path).GetPrim()
+        elif prim_type == "Sphere":
+            prim = UsdGeom.Sphere.Define(stage, prim_path).GetPrim()
+        elif prim_type == "Cube":
+            prim = UsdGeom.Cube.Define(stage, prim_path).GetPrim()
+        elif prim_type == "Cylinder":
+            prim = UsdGeom.Cylinder.Define(stage, prim_path).GetPrim()
+        elif prim_type == "Cone":
+            prim = UsdGeom.Cone.Define(stage, prim_path).GetPrim()
+        elif prim_type == "Capsule":
+            prim = UsdGeom.Capsule.Define(stage, prim_path).GetPrim()
+        elif prim_type == "Mesh":
+            prim = UsdGeom.Mesh.Define(stage, prim_path).GetPrim()
+        elif prim_type == "Points":
+            prim = UsdGeom.Points.Define(stage, prim_path).GetPrim()
+        elif prim_type == "Camera":
+            prim = UsdGeom.Camera.Define(stage, prim_path).GetPrim()
+        else:
+            # Generic prim definition
+            prim = stage.DefinePrim(prim_path, prim_type)
+        
+        if not prim or not prim.IsValid():
+            return error_response(f"Failed to create prim: {prim_path} of type {prim_type}")
+        
+        # Mark stage as modified
+        with registry_lock:
+            stage_modified[stage_id] = True
+        
+        return success_response("Prim created successfully", {
+            "stage_id": stage_id,
+            "prim_path": prim_path,
+            "prim_type": prim_type
+        })
+        
+    except Exception as e:
+        logger.exception(f"Error defining prim: {str(e)}")
+        return error_response(f"Error defining prim: {str(e)}")
+
+@mcp.tool()
+def create_stage_reference(stage_id: str, prim_path: str, reference_file_path: str, reference_prim_path: str = "") -> str:
+    """Create a reference from a prim to an external USD file
+    
+    Args:
+        stage_id: The ID of the stage to modify
+        prim_path: The path to the prim that should reference the external file
+        reference_file_path: Path to the referenced USD file
+        reference_prim_path: Optional path to a specific prim in the referenced file
+        
+    Returns:
+        JSON string with success or error description
+    """
+    try:
+        # Get the stage
+        with registry_lock:
+            if stage_id not in stage_registry:
+                return error_response(f"Stage not found: {stage_id}")
+            
+            stage = stage_registry[stage_id]
+        
+        # Check if the reference file exists
+        if not os.path.exists(reference_file_path):
+            return error_response(f"Reference file not found: {reference_file_path}")
+        
+        # Get or create the prim
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim.IsValid():
+            prim = stage.DefinePrim(prim_path)
+            if not prim.IsValid():
+                return error_response(f"Failed to create prim: {prim_path}")
+        
+        # Add the reference
+        references = prim.GetReferences()
+        if reference_prim_path:
+            references.AddReference(reference_file_path, reference_prim_path)
+        else:
+            references.AddReference(reference_file_path)
+        
+        # Mark stage as modified
+        with registry_lock:
+            stage_modified[stage_id] = True
+        
+        return success_response("Reference added successfully", {
+            "stage_id": stage_id,
+            "prim_path": prim_path,
+            "reference_file_path": reference_file_path,
+            "reference_prim_path": reference_prim_path
+        })
+        
+    except Exception as e:
+        logger.exception(f"Error creating reference: {str(e)}")
+        return error_response(f"Error creating reference: {str(e)}")
+
+@mcp.tool()
+def create_stage_mesh(stage_id: str, prim_path: str, points: list, face_vertex_counts: list, face_vertex_indices: list) -> str:
+    """Create a new mesh prim with the given geometry data
+    
+    Args:
+        stage_id: The ID of the stage to modify
+        prim_path: The path where the new mesh should be created
+        points: List of points as [x,y,z] coordinates
+        face_vertex_counts: Number of vertices per face
+        face_vertex_indices: Indices into the points array for each vertex of each face
+        
+    Returns:
+        JSON string with success or error description
+    """
+    try:
+        # Get the stage
+        with registry_lock:
+            if stage_id not in stage_registry:
+                return error_response(f"Stage not found: {stage_id}")
+            
+            stage = stage_registry[stage_id]
+        
+        # Create the mesh
+        mesh = UsdGeom.Mesh.Define(stage, prim_path)
+        
+        # Set points
+        mesh.CreatePointsAttr().Set(points)
+        
+        # Set face vertex counts
+        mesh.CreateFaceVertexCountsAttr().Set(face_vertex_counts)
+        
+        # Set face vertex indices
+        mesh.CreateFaceVertexIndicesAttr().Set(face_vertex_indices)
+        
+        # Mark stage as modified
+        with registry_lock:
+            stage_modified[stage_id] = True
+        
+        return success_response("Mesh created successfully", {
+            "stage_id": stage_id,
+            "prim_path": prim_path,
+            "points_count": len(points),
+            "faces_count": len(face_vertex_counts)
+        })
+        
+    except Exception as e:
+        logger.exception(f"Error creating mesh: {str(e)}")
+        return error_response(f"Error creating mesh: {str(e)}")
+
+@mcp.tool()
+def get_health() -> str:
+    """Get server health information
+    
+    Returns:
+        JSON string with health metrics
+    """
+    try:
+        # Calculate uptime
+        uptime_seconds = int(time.time() - server_start_time)
+        
+        # Get stage count
+        with registry_lock:
+            total_stages = len(stage_registry)
+            stage_ids = list(stage_registry.keys())
+        
+        # Basic health data
+        health_data = {
+            "status": "healthy",
+            "uptime_seconds": uptime_seconds,
+            "stages": {
+                "total": total_stages,
+                "ids": stage_ids
+            },
+            "version": "0.1.0"
+        }
+        
+        return success_response("Server is healthy", health_data)
+    except Exception as e:
+        logger.exception(f"Error getting health information: {str(e)}")
+        return error_response(f"Error getting health information: {str(e)}")
 
 @mcp.tool()
 def get_available_tools() -> str:
-    """Get comprehensive information about all available tools
+    """Get information about all available tools
     
     Returns:
         JSON string with detailed information about all available tools
@@ -163,516 +611,9 @@ def get_available_tools() -> str:
         logger.exception(f"Error getting available tools: {str(e)}")
         return error_response(f"Error getting available tools: {str(e)}")
 
-# Register core USD operations
-@mcp.tool()
-def create_new_stage(file_path: str, template: str = "empty", up_axis: str = "Y") -> str:
-    """Create a new USD stage with optional template
-    
-    Args:
-        file_path: Path to save the new USD file
-        template: Template to use ('empty', 'basic', 'physics', etc.)
-        up_axis: Up axis for the stage ('Y' or 'Z')
-        
-    Returns:
-        JSON string with stage ID or error description
-    """
-    return create_stage(file_path, template, up_axis)
-
-@mcp.tool()
-def open_usd_stage(file_path: str, create_if_missing: bool = False) -> str:
-    """Open an existing USD stage or create it if requested
-    
-    Args:
-        file_path: Path to the USD file to open
-        create_if_missing: Whether to create the file if it doesn't exist
-        
-    Returns:
-        JSON string with stage ID or error description
-    """
-    return open_stage(file_path, create_if_missing)
-
-@mcp.tool()
-def save_usd_stage(stage_id: str) -> str:
-    """Save a stage if it has been modified
-    
-    Args:
-        stage_id: The ID of the stage to save
-        
-    Returns:
-        JSON string with success or error description
-    """
-    return save_stage(stage_id)
-
-@mcp.tool()
-def list_stage_prims(stage_id: str, prim_path: str = "/") -> str:
-    """List all prims under a given path in the stage
-    
-    Args:
-        stage_id: The ID of the stage to query
-        prim_path: The path to start listing prims from
-        
-    Returns:
-        JSON string with list of prims or error description
-    """
-    return list_prims(stage_id, prim_path)
-
-@mcp.tool()
-def analyze_usd_stage(file_path: str) -> str:
-    """Analyze a USD stage and return information about its contents
-    
-    Args:
-        file_path: Path to the USD file to analyze
-        
-    Returns:
-        JSON string containing stage information or error description
-    """
-    return analyze_stage(file_path)
-
-@mcp.tool()
-def define_stage_prim(stage_id: str, prim_path: str, prim_type: str = "Xform") -> str:
-    """Define a new prim on the stage
-    
-    Args:
-        stage_id: The ID of the stage to modify
-        prim_path: The path where the new prim should be created
-        prim_type: The type of prim to create (Xform, Mesh, Sphere, etc.)
-        
-    Returns:
-        JSON string with success or error description
-    """
-    return define_prim(stage_id, prim_path, prim_type)
-
-@mcp.tool()
-def create_stage_reference(stage_id: str, prim_path: str, reference_file_path: str, reference_prim_path: str = "") -> str:
-    """Create a reference from a prim to an external USD file
-    
-    Args:
-        stage_id: The ID of the stage to modify
-        prim_path: The path to the prim that should reference the external file
-        reference_file_path: Path to the referenced USD file
-        reference_prim_path: Optional path to a specific prim in the referenced file
-        
-    Returns:
-        JSON string with success or error description
-    """
-    return create_reference(stage_id, prim_path, reference_file_path, reference_prim_path)
-
-@mcp.tool()
-def create_stage_mesh(stage_id: str, prim_path: str, points: list, face_vertex_counts: list, face_vertex_indices: list) -> str:
-    """Create a new mesh prim with the given geometry data
-    
-    Args:
-        stage_id: The ID of the stage to modify
-        prim_path: The path where the new mesh should be created
-        points: List of points as [x,y,z] coordinates
-        face_vertex_counts: Number of vertices per face
-        face_vertex_indices: Indices into the points array for each vertex of each face
-        
-    Returns:
-        JSON string with success or error description
-    """
-    return create_mesh(stage_id, prim_path, points, face_vertex_counts, face_vertex_indices)
-
-# Register physics tools
-@mcp.tool()
-def setup_physics_scene(stage_id: str, scene_path: str) -> str:
-    """Create a physics scene on a stage identified by ID
-    
-    Args:
-        stage_id: The ID of the stage
-        scene_path: Path where the physics scene will be created
-        
-    Returns:
-        JSON string with result information
-    """
-    return setup_physics_scene_by_id(stage_id, scene_path)
-
-@mcp.tool()
-def add_collision(stage_id: str, prim_path: str, collision_type: str = "mesh",
-                approximation: str = "convexHull", dimensions: list = None) -> str:
-    """Add a collision shape to an existing prim by stage ID
-    
-    Args:
-        stage_id: The ID of the stage
-        prim_path: Path to the prim to add collision to
-        collision_type: Type of collision shape ("mesh", "box", "sphere", "capsule", "plane")
-        approximation: Collision approximation method ("convexHull", "meshSimplification", "none")
-        dimensions: Optional dimensions for primitive shapes
-        
-    Returns:
-        JSON string with result information
-    """
-    return add_collision_by_id(stage_id, prim_path, collision_type, approximation, dimensions)
-
-@mcp.tool()
-def remove_collision(stage_id: str, prim_path: str) -> str:
-    """Remove collision from a prim by stage ID
-    
-    Args:
-        stage_id: The ID of the stage
-        prim_path: Path to the prim to remove collision from
-        
-    Returns:
-        JSON string with result information
-    """
-    return remove_collision_by_id(stage_id, prim_path)
-
-@mcp.tool()
-def add_rigid_body(stage_id: str, prim_path: str, mass: float = 1.0, dynamic: bool = True,
-                  initial_velocity: list = None) -> str:
-    """Add rigid body behavior to an existing prim by stage ID
-    
-    Args:
-        stage_id: The ID of the stage
-        prim_path: Path to the prim to make a rigid body
-        mass: Mass of the rigid body in kg
-        dynamic: Whether the body is dynamic (affected by physics) or static
-        initial_velocity: Optional initial linear velocity for the rigid body as [x, y, z]
-        
-    Returns:
-        JSON string with result information
-    """
-    return add_rigid_body_by_id(stage_id, prim_path, mass, dynamic, initial_velocity)
-
-@mcp.tool()
-def update_rigid_body(stage_id: str, prim_path: str, mass: float = None,
-                     dynamic: bool = None, velocity: list = None) -> str:
-    """Update rigid body properties for an existing rigid body by stage ID
-    
-    Args:
-        stage_id: The ID of the stage
-        prim_path: Path to the prim with the rigid body
-        mass: Optional new mass value
-        dynamic: Optional new dynamic state
-        velocity: Optional new velocity as [x, y, z]
-        
-    Returns:
-        JSON string with result information
-    """
-    return update_rigid_body_by_id(stage_id, prim_path, mass, dynamic, velocity)
-
-@mcp.tool()
-def remove_rigid_body(stage_id: str, prim_path: str) -> str:
-    """Remove rigid body behavior from a prim by stage ID
-    
-    Args:
-        stage_id: The ID of the stage
-        prim_path: Path to the prim to remove rigid body from
-        
-    Returns:
-        JSON string with result information
-    """
-    return remove_rigid_body_by_id(stage_id, prim_path)
-
-@mcp.tool()
-def create_joint(stage_id: str, joint_path: str, joint_type: str, body0_path: str, body1_path: str,
-               local_pos0: list = None, local_pos1: list = None,
-               local_rot0: list = None, local_rot1: list = None,
-               break_force: float = None, break_torque: float = None) -> str:
-    """Create a joint between two rigid bodies by stage ID
-    
-    Args:
-        stage_id: The ID of the stage
-        joint_path: Path where the joint prim will be created
-        joint_type: Type of joint ("fixed", "revolute", "prismatic", "spherical", "distance")
-        body0_path: Path to the first body
-        body1_path: Path to the second body
-        local_pos0: Optional local position for the joint on the first body as [x, y, z]
-        local_pos1: Optional local position for the joint on the second body as [x, y, z]
-        local_rot0: Optional local rotation for the joint on the first body as [x, y, z, w]
-        local_rot1: Optional local rotation for the joint on the second body as [x, y, z, w]
-        break_force: Optional break force for the joint
-        break_torque: Optional break torque for the joint
-        
-    Returns:
-        JSON string with result information
-    """
-    return create_joint_by_id(
-        stage_id, joint_path, joint_type, body0_path, body1_path,
-        local_pos0, local_pos1, local_rot0, local_rot1,
-        break_force, break_torque
-    )
-
-@mcp.tool()
-def configure_joint(stage_id: str, joint_path: str, axis: list = None, limits: dict = None) -> str:
-    """Configure parameters for an existing joint by stage ID
-    
-    Args:
-        stage_id: The ID of the stage
-        joint_path: Path to the joint prim
-        axis: Optional axis direction as [x, y, z] (for revolute and prismatic joints)
-        limits: Optional limits configuration dictionary with keys like "low", "high", "softness", etc.
-        
-    Returns:
-        JSON string with result information
-    """
-    return configure_joint_by_id(stage_id, joint_path, axis, limits)
-
-@mcp.tool()
-def remove_joint(stage_id: str, joint_path: str) -> str:
-    """Remove a joint by stage ID
-    
-    Args:
-        stage_id: The ID of the stage
-        joint_path: Path to the joint to remove
-        
-    Returns:
-        JSON string with result information
-    """
-    return remove_joint_by_id(stage_id, joint_path)
-
-# Register material tools
-@mcp.tool()
-def create_material(stage_id: str, material_path: str, material_type: str = "preview_surface",
-                  diffuse_color: list = None, emissive_color: list = None,
-                  metallic: float = None, roughness: float = None,
-                  opacity: float = None) -> str:
-    """Create a material by stage ID
-    
-    Args:
-        stage_id: The ID of the stage
-        material_path: Path where the material will be created
-        material_type: Type of material ("preview_surface", "pbr", etc.)
-        diffuse_color: Optional diffuse color as [r, g, b]
-        emissive_color: Optional emissive color as [r, g, b]
-        metallic: Optional metallic value (0-1)
-        roughness: Optional roughness value (0-1)
-        opacity: Optional opacity value (0-1)
-        
-    Returns:
-        JSON string with result information
-    """
-    return create_material_by_id(
-        stage_id, material_path, material_type,
-        diffuse_color, emissive_color, metallic, roughness, opacity
-    )
-
-@mcp.tool()
-def assign_material(stage_id: str, prim_path: str, material_path: str) -> str:
-    """Assign a material to a prim by stage ID
-    
-    Args:
-        stage_id: The ID of the stage
-        prim_path: Path to the prim to assign the material to
-        material_path: Path to the material to assign
-        
-    Returns:
-        JSON string with result information
-    """
-    return assign_material_by_id(stage_id, prim_path, material_path)
-
-@mcp.tool()
-def update_material(stage_id: str, material_path: str,
-                  diffuse_color: list = None, emissive_color: list = None,
-                  metallic: float = None, roughness: float = None,
-                  opacity: float = None) -> str:
-    """Update a material's properties by stage ID
-    
-    Args:
-        stage_id: The ID of the stage
-        material_path: Path to the material to update
-        diffuse_color: Optional diffuse color as [r, g, b]
-        emissive_color: Optional emissive color as [r, g, b]
-        metallic: Optional metallic value (0-1)
-        roughness: Optional roughness value (0-1)
-        opacity: Optional opacity value (0-1)
-        
-    Returns:
-        JSON string with result information
-    """
-    return update_material_by_id(
-        stage_id, material_path,
-        diffuse_color, emissive_color, metallic, roughness, opacity
-    )
-
-@mcp.tool()
-def create_texture_material(stage_id: str, material_path: str, 
-                          texture_file_path: str, 
-                          texture_type: str = "diffuse") -> str:
-    """Create a material with a texture by stage ID
-    
-    Args:
-        stage_id: The ID of the stage
-        material_path: Path where the material will be created
-        texture_file_path: Path to the texture file (PNG, JPG, etc.)
-        texture_type: Type of texture ("diffuse", "normal", "roughness", etc.)
-        
-    Returns:
-        JSON string with result information
-    """
-    return create_texture_material_by_id(
-        stage_id, material_path, texture_file_path, texture_type
-    )
-
-# Register animation tools
-@mcp.tool()
-def set_keyframe(stage_id: str, prim_path: str, attribute_name: str,
-               time: float, value: list = None,
-               interpolation: str = "linear") -> str:
-    """Set a keyframe for an attribute at a specific time by stage ID
-    
-    Args:
-        stage_id: The ID of the stage
-        prim_path: Path to the prim
-        attribute_name: Name of the attribute to animate
-        time: Time code for the keyframe
-        value: Value at the keyframe
-        interpolation: Interpolation type ("linear", "held", "bezier")
-        
-    Returns:
-        JSON string with result information
-    """
-    return set_keyframe_by_id(
-        stage_id, prim_path, attribute_name,
-        time, value, interpolation
-    )
-
-@mcp.tool()
-def create_animation(stage_id: str, prim_path: str, attribute_name: str,
-                   keyframes: list = None,
-                   time_range: list = None) -> str:
-    """Create a complete animation with multiple keyframes by stage ID
-    
-    Args:
-        stage_id: The ID of the stage
-        prim_path: Path to the prim
-        attribute_name: Name of the attribute to animate
-        keyframes: List of keyframe dictionaries with 'time', 'value', and optional 'interpolation'
-        time_range: Optional explicit time range for the animation as [start, end]
-        
-    Returns:
-        JSON string with result information
-    """
-    # Convert time_range from list to tuple if provided
-    time_range_tuple = tuple(time_range) if time_range else None
-    
-    return create_animation_by_id(
-        stage_id, prim_path, attribute_name,
-        keyframes, time_range_tuple
-    )
-
-@mcp.tool()
-def create_transform_animation(stage_id: str, prim_path: str,
-                             translate_keyframes: list = None,
-                             rotate_keyframes: list = None,
-                             scale_keyframes: list = None,
-                             time_range: list = None) -> str:
-    """Create a complete transform animation (translation, rotation, scale) by stage ID
-    
-    Args:
-        stage_id: The ID of the stage
-        prim_path: Path to the prim
-        translate_keyframes: Optional list of translation keyframe dictionaries
-        rotate_keyframes: Optional list of rotation keyframe dictionaries
-        scale_keyframes: Optional list of scale keyframe dictionaries
-        time_range: Optional explicit time range for the animation as [start, end]
-        
-    Returns:
-        JSON string with result information
-    """
-    # Convert time_range from list to tuple if provided
-    time_range_tuple = tuple(time_range) if time_range else None
-    
-    return create_transform_animation_by_id(
-        stage_id, prim_path,
-        translate_keyframes, rotate_keyframes, scale_keyframes,
-        time_range_tuple
-    )
-
-# Register visualization tools
-@mcp.tool()
-def visualize_scene_graph(stage_id: str, root_path: str = "/", format: str = "html") -> str:
-    """Generate a visualization of a stage's scene graph by stage ID
-    
-    Args:
-        stage_id: The ID of the stage
-        root_path: The root path to start visualization from
-        format: Output format ("html", "json", "text")
-        
-    Returns:
-        Visualization in the requested format or error response
-    """
-    return visualize_scene_graph_by_id(stage_id, root_path, format)
-
-# Register resources
-@mcp.resource("usd://schema")
-def get_usd_schema() -> str:
-    """Return information about common USD schema types
-    
-    Returns:
-        JSON string containing schema information
-    """
-    try:
-        schema_info = {
-            "UsdGeom.Xform": "Transform node that can be used for grouping and hierarchical transformations",
-            "UsdGeom.Mesh": "Polygonal mesh representation",
-            "UsdGeom.Points": "Point cloud representation",
-            "UsdGeom.Cube": "Parametric cube primitive",
-            "UsdGeom.Sphere": "Parametric sphere primitive",
-            "UsdGeom.Cylinder": "Parametric cylinder primitive",
-            "UsdGeom.Cone": "Parametric cone primitive",
-            "UsdLux.DistantLight": "Distant/directional light source",
-            "UsdLux.DomeLight": "Dome/environment light source",
-            "UsdLux.DiskLight": "Disk-shaped area light source",
-            "UsdLux.SphereLight": "Spherical area light source",
-            "UsdLux.RectLight": "Rectangular area light source",
-            "UsdShade.Material": "Material definition for surfaces",
-            "UsdPhysics.Scene": "Physics scene configuration",
-            "UsdPhysics.RigidBodyAPI": "Rigid body dynamics API",
-            "UsdPhysics.CollisionAPI": "Collision behavior API",
-            "UsdPhysics.MeshCollisionAPI": "Mesh-specific collision API",
-            "UsdPhysics.JointAPI": "Base API for all joint types",
-            "UsdPhysics.RevoluteJoint": "Revolute (hinge) joint",
-            "UsdPhysics.PrismaticJoint": "Prismatic (slider) joint",
-            "UsdPhysics.SphericalJoint": "Spherical (ball-and-socket) joint",
-            "UsdPhysics.FixedJoint": "Fixed (immovable) joint",
-            "UsdPhysics.DistanceJoint": "Distance constraint joint",
-            "UsdSkel.Skeleton": "Skeleton for skinned animation",
-            "UsdSkel.Animation": "Animation data for a skeleton",
-            "UsdSkel.BindingAPI": "API for binding meshes to skeletons"
-        }
-        
-        return success_response("USD schema information", schema_info)
-    except Exception as e:
-        logger.exception(f"Error getting USD schema: {str(e)}")
-        return error_response(f"Error getting USD schema: {str(e)}")
-
-@mcp.resource("usd://help")
-def get_omniverse_help() -> str:
-    """Return help information about the Omniverse USD MCP server
-    
-    Returns:
-        JSON string containing help information
-    """
-    try:
-        help_info = {
-            "name": "Omniverse USD MCP Server",
-            "version": "0.1.0",
-            "description": "A Model Context Protocol (MCP) server for USD and Omniverse operations",
-            "documentation": "https://github.com/yourusername/omniverse-usd-mcp-server/blob/main/README.md",
-            "command_categories": {
-                "Core USD": ["create_new_stage", "open_usd_stage", "save_usd_stage", "list_stage_prims", "analyze_usd_stage", "define_stage_prim", "create_stage_reference", "create_stage_mesh"],
-                "Physics": ["setup_physics_scene", "add_collision", "remove_collision", "add_rigid_body", "update_rigid_body", "remove_rigid_body", "create_joint", "configure_joint", "remove_joint"],
-                "Materials": ["create_material", "assign_material", "update_material", "create_texture_material"],
-                "Animation": ["set_keyframe", "create_animation", "create_transform_animation"],
-                "Visualization": ["visualize_scene_graph"],
-                "Server": ["get_health", "get_available_tools"]
-            },
-            "example_usages": {
-                "create_basic_scene": "1. create_new_stage('my_scene.usda', 'basic', 'Y') - Create a new stage with a basic scene template\n2. save_usd_stage(stage_id) - Save the stage",
-                "add_physics": "1. open_usd_stage('my_scene.usda') - Open an existing stage\n2. setup_physics_scene(stage_id, '/World/PhysicsScene') - Set up physics scene\n3. add_rigid_body(stage_id, '/World/Cube', 1.0, True) - Make a cube dynamic\n4. add_collision(stage_id, '/World/Cube', 'box') - Add collision to the cube",
-                "create_animation": "1. open_usd_stage('my_scene.usda') - Open an existing stage\n2. create_transform_animation(stage_id, '/World/Cube', [{\"time\": 0, \"value\": [0,0,0]}, {\"time\": 30, \"value\": [10,0,0]}]) - Animate cube position"
-            }
-        }
-        
-        return success_response("Omniverse USD MCP server help", help_info)
-    except Exception as e:
-        logger.exception(f"Error getting Omniverse help: {str(e)}")
-        return error_response(f"Error getting Omniverse help: {str(e)}")
-
 def parse_args():
     """Parse command line arguments for the server"""
-    parser = argparse.ArgumentParser(description='Omniverse USD MCP Server')
+    parser = argparse.ArgumentParser(description='USD MCP Server')
     parser.add_argument('--protocol', type=str, default='stdio', choices=['stdio', 'http', 'websocket', 'sse', 'tcp', 'zmq'],
                         help='Communication protocol for the server')
     parser.add_argument('--host', type=str, default='127.0.0.1', help='Host for HTTP/TCP/WebSocket/SSE servers')
@@ -694,9 +635,6 @@ def main():
         'critical': logging.CRITICAL
     }
     logging.basicConfig(level=log_level_map[args.log_level])
-    
-    # Start maintenance threads
-    cache_thread, registry_thread = start_maintenance_threads()
     
     # Set up server based on protocol
     if args.protocol == 'stdio':
