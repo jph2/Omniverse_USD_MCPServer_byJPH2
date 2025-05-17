@@ -1,0 +1,3 @@
+mcp[cli]
+pxr
+# Add any other dependencies your project needs 
