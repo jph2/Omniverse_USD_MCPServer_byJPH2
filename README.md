@@ -1,199 +1,233 @@
-[![Python](https://img.shields.io/badge/python-3.7%2B-blue)](https://www.python.org/)
-[![MCP](https://img.shields.io/badge/MCP-compatible-green)](https://modelcontextprotocol.io)
+# Omniverse USD MCP Server
+
+[![Python](https://img.shields.io/badge/Python-3.7%2B-blue)](https://www.python.org/)
+[![MCP](https://img.shields.io/badge/MCP-compatible-green)](https://docs.modelcontextprotocol.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Implementation Status](https://img.shields.io/badge/implementation-beta-orange)](REFACTORING.md)
 
-> **IMPORTANT: Implementation Status**
-> 
-> This project is under active development. The README documents both implemented features and planned features.
-> See the "Currently Implemented" section below for a precise list of available functionality.
+A powerful Model Context Protocol (MCP) server for working with Universal Scene Description (USD) and NVIDIA Omniverse. This server provides a standardized API for creating, manipulating, and analyzing USD scenes programmatically.
 
-An MCP (Model Context Protocol) server for working with USD (Universal Scene Description) and NVIDIA Omniverse. This server enables AI assistants and other clients to create, manipulate, and analyze USD scenes through a standardized API.
+## Features
 
-## Currently Implemented Features
+The server is organized into specialized modules that provide various USD capabilities:
 
-The following features are fully implemented and available in the current version:
-
-### Stage Management
-- ✅ Create and open USD stages (`create_stage`, `open_stage`)
-- ✅ Close and release stages from memory (`close_stage`, `close_stage_by_id`)
-- ✅ Analyze stage contents (`analyze_stage`, `analyze_stage_by_id`) 
-- ✅ Thread-safe stage registry with unique stage IDs
-
-### Geometry Creation
-- ✅ Create mesh geometry (`create_mesh`, `create_mesh_by_id`)
-- ✅ Add primitive shapes (`create_primitive`, `create_primitive_by_id`)
-- ✅ Add references to external USD files (`create_reference`, `create_reference_by_id`)
-- ✅ Export to different USD formats (`export_to_format`)
-
-### Materials & Appearance
-- ✅ Create PBR materials (`create_material`, `create_material_by_id`) 
-- ✅ Bind materials to geometry (`bind_material`, `bind_material_by_id`)
+### Core USD Operations
+- Thread-safe stage registry with lifecycle management
+- Stage creation, opening, saving, and analysis
+- Prim creation, traversal, and querying
+- Mesh creation and manipulation
+- References and layer composition
 
 ### Physics
-- ✅ Setup physics scenes (`setup_physics_scene`, `setup_physics_scene_by_id`)
-- ✅ Add rigid bodies (`add_rigid_body`, `add_rigid_body_by_id`)
-- ✅ Add colliders with different shapes (`add_collider`)
-- ✅ Create joints between rigid bodies (`add_joint`)
+- Physics scene setup with gravity customization
+- Rigid body simulation with dynamic/kinematic objects
+- Collision shapes (mesh, box, sphere, capsule, plane)
+- Joint system (revolute, prismatic, spherical, fixed, distance)
+
+### Materials
+- PBR material creation and binding
+- Shader parameters (diffuse, emissive, metallic, roughness, opacity)
+- Texture loading and mapping to material channels
 
 ### Animation
-- ✅ Set transforms with animation support (`set_transform`, `set_transform_by_id`)
-- ✅ Create keyframe animations (`create_animation`)
-- ✅ Create skeletons and skinning (`create_skeleton`, `bind_skeleton`)
-- ✅ Define skeletal animations (`create_skeletal_animation`)
+- Keyframe animation with interpolation types
+- Transform animation (translate, rotate, scale)
+- Timeline management and range setting
 
-### Utilities
-- ✅ Scene graph visualization (`visualize_scene_graph`, `visualize_scene_graph_by_id`)
-- ✅ Server status monitoring (`get_server_status`, `get_registry_status`)
-- ✅ Search Omniverse development guide (`search_omniverse_guide`)
+### Visualization
+- Scene graph visualization in multiple formats (HTML, JSON, text)
+- Hierarchy inspection and attribute display
 
-### Resources
-- ✅ USD schema information (`usd://schema`)
-- ✅ Omniverse help (`omniverse://help`)
-- ✅ Omniverse development guide (`omniverse://development-guide`)
+## Installation
 
-## Planned Features
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/omniverse-usd-mcp-server.git
+cd omniverse-usd-mcp-server
 
-The following features are planned but not yet fully implemented:
-
-- 🔄 Expanded physics capabilities (constraints, forces, etc.)
-- 🔄 Extended animation tooling (blend shapes, motion clips)
-- 🔄 Material variants and shading networks
-- 🔄 Procedural geometry creation
-- 🔄 USD Composition advanced features (variants, inherits)
-- 🔄 Multi-stage operations
-
-## Primary Focus: Cursor Integration
-
-This project provides seamless integration with **Cursor**, the AI-powered code editor, allowing for a powerful USD development workflow:
-
-- **Code-centric USD development**: Create and modify USD scenes directly from your Python code
-- **AI-assisted workflows**: Leverage Cursor's AI capabilities to generate USD operations using natural language
-- **Complete Python API**: Access all USD features through the `cursor_integration.py` module
-- **Example scripts**: Start with the provided examples like `cursor_example.py` to learn the basics
+# Install dependencies
+pip install -r requirements.txt
+```
 
 ## Quick Start
 
-### Installation
-
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# Start the server with stdio protocol (for CLI interaction)
+python -m usd_mcp_server
 
-# Start the server in stdio mode (for Claude Desktop App)
-python usd_mcp_server.py
-
-# Start the server in HTTP mode (for web clients)
-python usd_mcp_server.py --protocol=http --host=0.0.0.0 --port=5000
+# Start the server with HTTP protocol (for web clients)
+python -m usd_mcp_server --protocol=http --host=0.0.0.0 --port=5000
 ```
 
-### Basic Usage with Python Client
+## Using the Server
+
+The server can be used with any Model Context Protocol (MCP) client. Here's an example using the Python client included:
 
 ```python
-from usd_mcp_client import UsdMcpClient
 import asyncio
+import sys
+import os
+
+# Add the parent directory to the path
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+from usd_mcp_client import UsdMcpClient
 
 async def run_example():
     # Create client and connect
-    client = UsdMcpClient("python", ["usd_mcp_server.py"])
+    client = UsdMcpClient("stdio", ["python", "-m", "usd_mcp_server"])
     await client.connect()
     
     try:
-        # Open a stage
-        stage_id_result = await client.open_stage("example.usda", create_if_missing=True)
-        stage_id = stage_id_result  # Extract stage_id from response
+        # Create a new stage
+        result = await client.call_tool("create_new_stage", {
+            "file_path": "example.usda",
+            "template": "basic",
+            "up_axis": "Y"
+        })
+        stage_id = result["data"]["stage_id"]
         
-        # Create a primitive
-        await client.create_primitive_by_id(
-            stage_id,
-            "cube",
-            "/World/Cube",
-            size=2.0,
-            position=(0, 1, 0)
-        )
+        # Add a cube
+        await client.call_tool("define_stage_prim", {
+            "stage_id": stage_id,
+            "prim_path": "/World/Cube",
+            "prim_type": "Cube"
+        })
         
-        # Add a material
-        await client.create_material_by_id(
-            stage_id,
-            "/World/Materials/RedMaterial",
-            diffuse_color=(1, 0, 0),
-            metallic=0.1,
-            roughness=0.3
-        )
+        # Add physics
+        await client.call_tool("setup_physics_scene", {
+            "stage_id": stage_id,
+            "scene_path": "/World/PhysicsScene"
+        })
         
-        # Bind material to geometry
-        await client.bind_material_by_id(
-            stage_id,
-            "/World/Cube",
-            "/World/Materials/RedMaterial"
-        )
+        await client.call_tool("add_rigid_body", {
+            "stage_id": stage_id,
+            "prim_path": "/World/Cube",
+            "mass": 1.0,
+            "dynamic": True
+        })
         
-        # Visualize the scene graph
-        await client.visualize_scene_graph_by_id(
-            stage_id,
-            output_format="text",
-            include_properties=True
-        )
+        # Save the stage
+        await client.call_tool("save_usd_stage", {
+            "stage_id": stage_id
+        })
         
-        # Close the stage
-        await client.close_stage_by_id(stage_id)
     finally:
-        # Disconnect from server
-        await client.disconnect()
+        await client.close()
 
 # Run the example
 asyncio.run(run_example())
 ```
 
-## AI Integration
+## Server Protocols
 
-This project provides integration with AI assistants using the Model Context Protocol (MCP):
+The server supports multiple communication protocols:
 
-### Available Integrations
+- `stdio`: Standard input/output (default, for embedding in applications)
+- `http`: HTTP protocol for web clients
+- `websocket`: WebSocket protocol for real-time applications
+- `sse`: Server-Sent Events for one-way real-time updates
+- `tcp`: Raw TCP protocol
+- `zmq`: ZeroMQ protocol for high-performance applications
 
-- **Cursor AI Integration**: Direct integration with Cursor for USD creation and manipulation
-- **Claude Integration**: Connect to Anthropic's Claude model for advanced reasoning
-- **ChatGPT Integration**: Use OpenAI's function calling capabilities
+## Available Tools
 
-See [INTEGRATION_GUIDE.md](./INTEGRATION_GUIDE.md) for setup instructions.
+The server provides a rich set of tools for USD operations:
 
-## Architecture
+### Core USD Tools
 
-### Two-Level Architecture
+- `create_new_stage`: Create a new USD stage
+- `open_usd_stage`: Open an existing USD stage
+- `save_usd_stage`: Save changes to a stage
+- `list_stage_prims`: List all prims in a stage
+- `analyze_usd_stage`: Analyze stage content
+- `define_stage_prim`: Create a new prim
+- `create_stage_reference`: Create a reference to another USD file
+- `create_stage_mesh`: Create a mesh with geometry data
 
-The server is structured in two distinct layers for clarity and maintainability:
+### Physics Tools
 
-#### Level A: Basic USD Operations
-- **StageRegistry**: Thread-safe registry for centralized stage management
-- **Stage IDs**: All stages are assigned unique IDs for reference
-- **Memory Management**: Efficient LRU caching
+- `setup_physics_scene`: Create a physics scene
+- `add_collision`: Add collision to a prim
+- `remove_collision`: Remove collision from a prim
+- `add_rigid_body`: Make a prim a rigid body
+- `update_rigid_body`: Update rigid body properties
+- `remove_rigid_body`: Remove rigid body behavior
+- `create_joint`: Create a joint between two prims
+- `configure_joint`: Configure joint properties
+- `remove_joint`: Remove a joint
 
-#### Level B: Advanced USD Operations
-- **Stage ID-based API**: Higher-level operations using the stage registry
-- **Domain-specific Tools**: Physics, animation, materials, etc.
+### Material Tools
+
+- `create_material`: Create a new material
+- `assign_material`: Assign a material to a prim
+- `update_material`: Update material properties
+- `create_texture_material`: Create a material with a texture
+
+### Animation Tools
+
+- `set_keyframe`: Set a keyframe for an attribute
+- `create_animation`: Create animation with multiple keyframes
+- `create_transform_animation`: Create a transform animation
+
+### Visualization Tools
+
+- `visualize_scene_graph`: Generate a visualization of the scene graph
+
+### Server Management Tools
+
+- `get_health`: Get server health information
+- `get_available_tools`: Get information about available tools
+
+## Resources
+
+The server also provides additional resources:
+
+- `usd://schema`: Information about USD schema
+- `usd://help`: Help information for the server
+
+## Project Structure
 
 ```
-Client → Level B (stage_id-based tools) → Level A (StageRegistry) → USD/Omniverse APIs
+usd_mcp_server/
+├── __init__.py           # Package initialization
+├── __main__.py           # Main entry point
+├── core/                 # Core USD operations
+│   ├── __init__.py
+│   ├── registry.py       # Thread-safe stage registry
+│   └── stage_operations.py # Basic USD operations
+├── physics/              # Physics simulation
+│   ├── __init__.py
+│   ├── setup.py          # Physics scene setup
+│   ├── collisions.py     # Collision shapes
+│   ├── rigid_bodies.py   # Rigid body dynamics
+│   └── joints.py         # Joints and constraints
+├── materials/            # Material and shader support
+│   ├── __init__.py
+│   └── shaders.py        # Material creation and binding
+├── animation/            # Animation support
+│   ├── __init__.py
+│   └── keyframes.py      # Keyframe animation
+├── visualization/        # Visualization utilities
+│   ├── __init__.py
+│   └── scene_graph.py    # Scene graph visualization
+└── tests/                # Unit tests
+    ├── __init__.py
+    └── test_basic.py     # Basic functionality tests
 ```
 
-## Server Configuration
+## Example Scripts
 
-The server supports multiple transport protocols and configuration options:
+In the `examples/` directory, you'll find example scripts demonstrating how to use the server:
 
-| Argument | Description | Default |
-|----------|-------------|---------|
-| `--host` | Bind address | `127.0.0.1` |
-| `--port` | Server port | `5000` |
-| `--protocol` | Protocol (`stdio`, `http`, `sse`) | `stdio` |
-| `--log-level` | Logging level | `INFO` |
+- `basic_example.py`: Shows basic stage creation and manipulation
+- Additional examples for specific areas (physics, materials, etc.)
 
 ## Contributing
 
-Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## Acknowledgements
 
@@ -203,4 +237,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-*Maintained by Jan Haluszka · [GitHub/jph2](https://github.com/jph2)*
+*Maintained by Jan Haluszka*
