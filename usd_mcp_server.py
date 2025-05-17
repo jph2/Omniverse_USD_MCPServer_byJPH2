@@ -154,6 +154,37 @@ def cleanup_stage_cache():
 cache_thread = threading.Thread(target=maintain_stage_cache, daemon=True)
 cache_thread.start()
 
+# Start the stage registry maintenance thread
+registry_thread = threading.Thread(target=maintain_stage_registry, daemon=True)
+registry_thread.start()
+
+def maintain_stage_registry():
+    """Background thread function to periodically maintain the stage registry.
+    
+    This function:
+    1. Performs cache cleanup based on LRU policy
+    2. Saves modified stages periodically
+    """
+    logger.info("Stage registry maintenance thread started")
+    
+    while True:
+        try:
+            # Sleep for the maintenance interval
+            time.sleep(300)  # Every 5 minutes
+            
+            # Perform cache cleanup if needed
+            stages_removed = stage_registry.perform_cache_cleanup()
+            if stages_removed > 0:
+                logger.info(f"Stage registry maintenance: removed {stages_removed} stages from cache")
+            
+            # Get statistics
+            stats = stage_registry.get_stats()
+            logger.debug(f"Stage registry stats: {stats}")
+            
+        except Exception as e:
+            logger.exception(f"Error in stage registry maintenance thread: {str(e)}")
+            # Continue running even if there was an error
+
 # =============================================================================
 # USD Stage Tools
 # =============================================================================
@@ -191,8 +222,8 @@ def create_stage(file_path: str, template: Optional[str] = None, up_axis: str = 
         # Create stage content based on template
         if not template or template == 'empty':
             # Just create an empty root prim
-        root_prim = UsdGeom.Xform.Define(stage, '/root')
-        stage.SetDefaultPrim(root_prim.GetPrim())
+            root_prim = UsdGeom.Xform.Define(stage, '/root')
+            stage.SetDefaultPrim(root_prim.GetPrim())
         elif template == 'basic':
             # Create basic scene structure
             root_prim = UsdGeom.Xform.Define(stage, '/World')
@@ -325,8 +356,8 @@ def analyze_stage(file_path: str) -> str:
         if abs_path in stage_cache:
             stage = stage_cache[abs_path]
         else:
-        stage = Usd.Stage.Open(file_path)
-        if not stage:
+            stage = Usd.Stage.Open(file_path)
+            if not stage:
                 return error_response(f"Failed to open stage: {file_path}")
             stage_cache[abs_path] = stage
         
@@ -341,33 +372,33 @@ def analyze_stage(file_path: str) -> str:
         
         # Traverse prim hierarchy with SdfChangeBlock for better performance
         with Sdf.ChangeBlock():
-        for prim in Usd.PrimRange.Stage(stage):
-            prim_data = {
-                "path": str(prim.GetPath()),
-                "type": prim.GetTypeName(),
-                "active": prim.IsActive(),
-                "attributes": []
-            }
-            
-            # Gather attribute information for this prim
-            if prim.GetTypeName():  # Only if prim has a type
-                for attribute in prim.GetAttributes():
-                    attr_data = {
-                        "name": attribute.GetName(),
-                        "type": str(attribute.GetTypeName())
-                    }
-                    
-                    # Try to get the attribute value
-                    try:
-                        value = attribute.Get()
-                        if value is not None:
-                            attr_data["value"] = str(value)
-                    except:
-                        pass  # Skip if we can't get the value
-                    
-                    prim_data["attributes"].append(attr_data)
-            
-            result["prims"].append(prim_data)
+            for prim in Usd.PrimRange.Stage(stage):
+                prim_data = {
+                    "path": str(prim.GetPath()),
+                    "type": prim.GetTypeName(),
+                    "active": prim.IsActive(),
+                    "attributes": []
+                }
+                
+                # Gather attribute information for this prim
+                if prim.GetTypeName():  # Only if prim has a type
+                    for attribute in prim.GetAttributes():
+                        attr_data = {
+                            "name": attribute.GetName(),
+                            "type": str(attribute.GetTypeName())
+                        }
+                        
+                        # Try to get the attribute value
+                        try:
+                            value = attribute.Get()
+                            if value is not None:
+                                attr_data["value"] = str(value)
+                        except:
+                            pass  # Skip if we can't get the value
+                        
+                        prim_data["attributes"].append(attr_data)
+                
+                result["prims"].append(prim_data)
         
         return success_response("Stage analysis complete", result)
     except Exception as e:
@@ -425,18 +456,18 @@ def create_mesh(
         
         # Use a ChangeBlock for performance
         with Sdf.ChangeBlock():
-        # Create mesh
-        mesh = UsdGeom.Mesh.Define(stage, prim_path)
-        
-        # Set mesh data
-        mesh.GetPointsAttr().Set(points)
-        mesh.GetFaceVertexCountsAttr().Set(face_vertex_counts)
-        mesh.GetFaceVertexIndicesAttr().Set(face_vertex_indices)
-        
-        # Add display color attribute if it doesn't exist
-        if not mesh.GetDisplayColorAttr():
-            mesh.CreateDisplayColorAttr()
-            mesh.GetDisplayColorAttr().Set([(0.8, 0.8, 0.8)])  # Default gray color
+            # Create mesh
+            mesh = UsdGeom.Mesh.Define(stage, prim_path)
+            
+            # Set mesh data
+            mesh.GetPointsAttr().Set(points)
+            mesh.GetFaceVertexCountsAttr().Set(face_vertex_counts)
+            mesh.GetFaceVertexIndicesAttr().Set(face_vertex_indices)
+            
+            # Add display color attribute if it doesn't exist
+            if not mesh.GetDisplayColorAttr():
+                mesh.CreateDisplayColorAttr()
+                mesh.GetDisplayColorAttr().Set([(0.8, 0.8, 0.8)])  # Default gray color
         
         # Save stage
         stage.GetRootLayer().Save()
@@ -1741,28 +1772,28 @@ def get_usd_schema() -> str:
         JSON string containing schema information
     """
     try:
-    schema_info = {
-        "UsdGeom.Xform": "Transform node that can be used for grouping and hierarchical transformations",
-        "UsdGeom.Mesh": "Polygonal mesh representation",
-        "UsdGeom.Points": "Point cloud representation",
-        "UsdGeom.Cube": "Parametric cube primitive",
-        "UsdGeom.Sphere": "Parametric sphere primitive",
-        "UsdGeom.Cylinder": "Parametric cylinder primitive",
-        "UsdGeom.Cone": "Parametric cone primitive",
-        "UsdLux.DistantLight": "Distant/directional light source",
-        "UsdLux.DomeLight": "Dome/environment light source",
-        "UsdLux.DiskLight": "Disk-shaped area light source",
-        "UsdLux.SphereLight": "Spherical area light source",
-        "UsdLux.RectLight": "Rectangular area light source",
-        "UsdSkel.Skeleton": "Joints and rest pose for skeletal animation",
-        "UsdSkel.SkelAnimation": "Joint animation data",
-        "UsdShade.Material": "Material definition for surfaces",
-        "UsdShade.Shader": "Shader implementation for materials",
-        "UsdPhysics.RigidBody": "Rigid body for physics simulations",
-        "UsdPhysics.CollisionAPI": "API for collision detection in physics",
-        "UsdPhysics.JointAPI": "API for joint constraints in physics"
-    }
-    return json.dumps(schema_info, indent=2)
+        schema_info = {
+            "UsdGeom.Xform": "Transform node that can be used for grouping and hierarchical transformations",
+            "UsdGeom.Mesh": "Polygonal mesh representation",
+            "UsdGeom.Points": "Point cloud representation",
+            "UsdGeom.Cube": "Parametric cube primitive",
+            "UsdGeom.Sphere": "Parametric sphere primitive",
+            "UsdGeom.Cylinder": "Parametric cylinder primitive",
+            "UsdGeom.Cone": "Parametric cone primitive",
+            "UsdLux.DistantLight": "Distant/directional light source",
+            "UsdLux.DomeLight": "Dome/environment light source",
+            "UsdLux.DiskLight": "Disk-shaped area light source",
+            "UsdLux.SphereLight": "Spherical area light source",
+            "UsdLux.RectLight": "Rectangular area light source",
+            "UsdSkel.Skeleton": "Joints and rest pose for skeletal animation",
+            "UsdSkel.SkelAnimation": "Joint animation data",
+            "UsdShade.Material": "Material definition for surfaces",
+            "UsdShade.Shader": "Shader implementation for materials",
+            "UsdPhysics.RigidBody": "Rigid body for physics simulations",
+            "UsdPhysics.CollisionAPI": "API for collision detection in physics",
+            "UsdPhysics.JointAPI": "API for joint constraints in physics"
+        }
+        return json.dumps(schema_info, indent=2)
     except Exception as e:
         logger.exception(f"Error retrieving USD schema information: {str(e)}")
         return error_response(f"Error retrieving USD schema information: {str(e)}")
@@ -2283,6 +2314,40 @@ def get_server_status() -> str:
         logger.exception(f"Error getting server status: {e}")
         return error_response(f"Error getting server status: {str(e)}", "STATUS_ERROR")
 
+@mcp.tool()
+def get_registry_status() -> str:
+    """Get the current status of the stage registry
+    
+    Returns:
+        JSON string with registry status information
+    """
+    try:
+        # Get registry statistics
+        stats = stage_registry.get_stats()
+        
+        # Add additional information
+        stats["server_uptime"] = int(time.time() - server_start_time)
+        stats["server_version"] = VERSION
+        
+        # Get detailed information for each stage
+        stage_details = []
+        for stage_id in stats["stage_ids"]:
+            file_path = stage_registry.get_stage_path(stage_id)
+            is_modified = stage_registry.is_modified(stage_id)
+            
+            stage_details.append({
+                "stage_id": stage_id,
+                "file_path": file_path,
+                "modified": is_modified
+            })
+        
+        stats["stage_details"] = stage_details
+        
+        return success_response("Stage registry status", stats)
+    except Exception as e:
+        logger.exception(f"Error retrieving registry status: {str(e)}")
+        return error_response(f"Error retrieving registry status: {str(e)}")
+
 # =============================================================================
 # Server Startup with CLI Arguments
 # =============================================================================
@@ -2397,6 +2462,1088 @@ def visualize_scene_graph(file_path: str, output_format: str = "text", output_pa
     except Exception as e:
         logger.exception(f"Error visualizing scene graph: {e}")
         return error_response(f"Failed to visualize scene graph: {str(e)}", "VISUALIZATION_ERROR")
+
+@mcp.tool()
+def visualize_scene_graph_by_id(
+    stage_id: str, 
+    output_format: str = "text", 
+    output_path: Optional[str] = None, 
+    max_depth: int = -1, 
+    include_properties: bool = False,
+    filter_type: Optional[str] = None,
+    filter_path: Optional[str] = None
+) -> str:
+    """Generate a visualization of the USD scene graph using stage ID
+    
+    Args:
+        stage_id: ID of the stage to visualize
+        output_format: Format of the visualization ('text', 'html', 'json', 'network')
+        output_path: Optional path to save the visualization output
+        max_depth: Maximum depth to traverse (-1 for unlimited)
+        include_properties: Whether to include prim properties
+        filter_type: Optional filter to show only prims of a specific type
+        filter_path: Optional regex pattern to filter prim paths
+        
+    Returns:
+        JSON string with success status and visualization data
+    """
+    try:
+        # Get the stage from registry
+        stage = stage_registry.get_stage(stage_id)
+        if not stage:
+            return error_response(f"Stage with ID {stage_id} not found")
+        
+        # Get the file path
+        file_path = stage_registry.get_stage_path(stage_id)
+        
+        # Process scene graph based on format
+        valid_formats = ["text", "html", "json", "network"]
+        if output_format.lower() not in valid_formats:
+            return error_response(f"Invalid output format: {output_format}. Must be one of {valid_formats}")
+        
+        # Prepare filter functions
+        type_filter = None
+        path_filter = None
+        
+        if filter_type:
+            type_filter = lambda prim: prim.GetTypeName() == filter_type
+            
+        if filter_path:
+            import re
+            path_pattern = re.compile(filter_path)
+            path_filter = lambda prim: path_pattern.search(str(prim.GetPath())) is not None
+            
+        # Combine filters if both are present
+        prim_filter = None
+        if type_filter and path_filter:
+            prim_filter = lambda prim: type_filter(prim) and path_filter(prim)
+        elif type_filter:
+            prim_filter = type_filter
+        elif path_filter:
+            prim_filter = path_filter
+        
+        # Create scene graph data structure
+        scene_data = {"name": os.path.basename(file_path), "children": []}
+        
+        # Compute scene graph structure
+        def process_prim(prim, parent_data, current_depth=0):
+            # Check depth limit
+            if max_depth >= 0 and current_depth > max_depth:
+                return
+                
+            # Apply filter if specified
+            if prim_filter and not prim_filter(prim):
+                # If this prim doesn't match but might have children that do, continue
+                for child in prim.GetChildren():
+                    process_prim(child, parent_data, current_depth + 1)
+                return
+                
+            # Create node for this prim
+            prim_data = {
+                "name": prim.GetName(),
+                "path": str(prim.GetPath()),
+                "type": prim.GetTypeName(),
+                "children": []
+            }
+            
+            # Add properties if requested
+            if include_properties:
+                props = {}
+                for prop in prim.GetProperties():
+                    try:
+                        value = prop.Get()
+                        if value is not None:
+                            props[prop.GetName()] = str(value)
+                    except:
+                        props[prop.GetName()] = "<error retrieving value>"
+                prim_data["properties"] = props
+                
+            # Add to parent's children
+            parent_data["children"].append(prim_data)
+            
+            # Process children
+            for child in prim.GetChildren():
+                process_prim(child, prim_data, current_depth + 1)
+        
+        # Start processing with root prim
+        default_prim = stage.GetDefaultPrim()
+        if default_prim:
+            process_prim(default_prim, scene_data)
+        else:
+            # Process all root prims if no default
+            for root_prim in stage.GetPseudoRoot().GetChildren():
+                process_prim(root_prim, scene_data)
+        
+        # Generate output based on format
+        result = None
+        if output_format.lower() == "text":
+            # Generate text representation
+            text_output = []
+            
+            def format_prim_text(prim_data, indent=0):
+                line = " " * indent + f"- {prim_data['name']} ({prim_data['type']})"
+                text_output.append(line)
+                
+                # Add properties if included
+                if include_properties and "properties" in prim_data:
+                    for name, value in prim_data["properties"].items():
+                        prop_line = " " * (indent + 2) + f"{name}: {value}"
+                        text_output.append(prop_line)
+                
+                # Process children
+                for child in prim_data["children"]:
+                    format_prim_text(child, indent + 2)
+            
+            # Start formatting from root
+            text_output.append(f"Scene Graph for: {os.path.basename(file_path)}")
+            for root_prim in scene_data["children"]:
+                format_prim_text(root_prim)
+                
+            result = "\n".join(text_output)
+            
+        elif output_format.lower() == "html":
+            # Generate HTML representation with collapsible tree
+            html_output = [
+                "<!DOCTYPE html>",
+                "<html>",
+                "<head>",
+                "  <title>USD Scene Graph Visualization</title>",
+                "  <style>",
+                "    body { font-family: Arial, sans-serif; margin: 20px; }",
+                "    .tree-node { margin-left: 20px; }",
+                "    .node-content { cursor: pointer; padding: 2px; }",
+                "    .node-content:hover { background-color: #f0f0f0; }",
+                "    .properties { margin-left: 20px; color: #555; font-size: 0.9em; }",
+                "    .prim-type { color: #888; font-style: italic; }",
+                "    .collapsed .tree-node { display: none; }",
+                "    .collapsed .properties { display: none; }",
+                "    .expander { display: inline-block; width: 15px; }",
+                "  </style>",
+                "  <script>",
+                "    function toggleNode(element) {",
+                "      element.parentElement.classList.toggle('collapsed');",
+                "    }",
+                "  </script>",
+                "</head>",
+                "<body>",
+                f"  <h2>USD Scene Graph: {os.path.basename(file_path)}</h2>"
+            ]
+            
+            def format_prim_html(prim_data):
+                has_children = len(prim_data["children"]) > 0 or ("properties" in prim_data and len(prim_data["properties"]) > 0)
+                node_class = " collapsed" if has_children else ""
+                
+                html = [f"<div class='node{node_class}'>"]
+                
+                if has_children:
+                    expander = "[-]"
+                else:
+                    expander = "&nbsp;&nbsp;"
+                    
+                html.append(f"  <div class='node-content' onclick='toggleNode(this)'>")
+                html.append(f"    <span class='expander'>{expander}</span>")
+                html.append(f"    {prim_data['name']} <span class='prim-type'>({prim_data['type']})</span>")
+                html.append(f"  </div>")
+                
+                # Add properties
+                if include_properties and "properties" in prim_data:
+                    html.append(f"  <div class='properties'>")
+                    for name, value in prim_data["properties"].items():
+                        html.append(f"    <div>{name}: {value}</div>")
+                    html.append(f"  </div>")
+                
+                # Add children
+                if prim_data["children"]:
+                    html.append(f"  <div class='tree-node'>")
+                    for child in prim_data["children"]:
+                        html.extend(format_prim_html(child))
+                    html.append(f"  </div>")
+                
+                html.append("</div>")
+                return html
+            
+            # Add all root prims
+            for root_prim in scene_data["children"]:
+                html_output.extend(format_prim_html(root_prim))
+                
+            # Close HTML
+            html_output.extend(["</body>", "</html>"])
+            result = "\n".join(html_output)
+            
+        elif output_format.lower() == "json":
+            # Return the raw JSON data
+            import json
+            result = json.dumps(scene_data, indent=2)
+            
+        elif output_format.lower() == "network":
+            # Generate a network graph format suitable for visualization tools
+            network_data = {
+                "nodes": [],
+                "links": []
+            }
+            
+            # Node ID counter
+            node_id = 0
+            path_to_id = {}
+            
+            def add_to_network(prim_data, parent_id=None):
+                nonlocal node_id
+                current_id = node_id
+                node_id += 1
+                
+                # Store mapping from path to id
+                path_to_id[prim_data["path"]] = current_id
+                
+                # Create node
+                node = {
+                    "id": current_id,
+                    "name": prim_data["name"],
+                    "path": prim_data["path"],
+                    "type": prim_data["type"]
+                }
+                
+                # Add properties if requested
+                if include_properties and "properties" in prim_data:
+                    node["properties"] = prim_data["properties"]
+                    
+                network_data["nodes"].append(node)
+                
+                # Create link to parent if exists
+                if parent_id is not None:
+                    network_data["links"].append({
+                        "source": parent_id,
+                        "target": current_id,
+                        "type": "child"
+                    })
+                
+                # Process children
+                for child in prim_data["children"]:
+                    add_to_network(child, current_id)
+            
+            # Process all root prims
+            for root_prim in scene_data["children"]:
+                add_to_network(root_prim)
+                
+            import json
+            result = json.dumps(network_data, indent=2)
+        
+        # Save to file if output path provided
+        if output_path and result:
+            with open(output_path, 'w') as f:
+                f.write(result)
+        
+        # Return result
+        response_data = {
+            "stage_id": stage_id,
+            "file_path": file_path,
+            "format": output_format
+        }
+        
+        if output_path:
+            response_data["output_path"] = output_path
+        else:
+            response_data["visualization"] = result
+            
+        return success_response(f"Successfully visualized scene graph for {os.path.basename(file_path)}", response_data)
+    except Exception as e:
+        logger.exception(f"Error visualizing scene graph: {str(e)}")
+        return error_response(f"Error visualizing scene graph: {str(e)}", "VISUALIZATION_ERROR")
+
+# =============================================================================
+# Stage Registry (Level A: Basic MCP)
+# =============================================================================
+
+class StageRegistry:
+    """Thread-safe registry for managing USD stages.
+    
+    This registry:
+    1. Maintains a map of stage_id → Usd.Stage objects
+    2. Tracks file paths associated with each stage
+    3. Tracks modification status for each stage
+    4. Implements LRU cache functionality with access times
+    """
+    
+    def __init__(self, max_cache_size=10):
+        """Initialize the stage registry with specified cache size.
+        
+        Args:
+            max_cache_size: Maximum number of stages to keep in memory
+        """
+        self._stages = {}  # Map of stage_id → Usd.Stage
+        self._stage_file_paths = {}  # Map of stage_id → file_path
+        self._stage_access_times = {}  # Map of stage_id → last_access_time
+        self._stage_modified = {}  # Map of stage_id → is_modified
+        self._lock = threading.Lock()
+        self.max_cache_size = max_cache_size
+    
+    def register_stage(self, file_path, stage):
+        """Register a stage with the registry and return its unique ID.
+        
+        Args:
+            file_path: Path to the USD file associated with this stage
+            stage: The Usd.Stage object to register
+            
+        Returns:
+            str: A unique stage_id for this stage
+        """
+        with self._lock:
+            stage_id = str(uuid.uuid4())
+            self._stages[stage_id] = stage
+            self._stage_file_paths[stage_id] = file_path
+            self._stage_access_times[stage_id] = time.time()
+            self._stage_modified[stage_id] = False
+            
+            # Check if we need to clean up the cache
+            if len(self._stages) > self.max_cache_size:
+                self.perform_cache_cleanup()
+                
+            return stage_id
+    
+    def get_stage(self, stage_id):
+        """Get a stage by its ID and update its access time.
+        
+        Args:
+            stage_id: The unique ID of the stage to retrieve
+            
+        Returns:
+            Usd.Stage or None: The stage if found, None otherwise
+        """
+        with self._lock:
+            if stage_id in self._stages:
+                # Update access time
+                self._stage_access_times[stage_id] = time.time()
+                return self._stages[stage_id]
+            return None
+    
+    def get_stage_path(self, stage_id):
+        """Get the file path associated with a stage.
+        
+        Args:
+            stage_id: The unique ID of the stage
+            
+        Returns:
+            str or None: The file path if found, None otherwise
+        """
+        with self._lock:
+            return self._stage_file_paths.get(stage_id)
+    
+    def mark_as_modified(self, stage_id):
+        """Mark a stage as having unsaved modifications.
+        
+        Args:
+            stage_id: The unique ID of the stage
+            
+        Returns:
+            bool: True if the stage was found and marked, False otherwise
+        """
+        with self._lock:
+            if stage_id in self._stages:
+                self._stage_modified[stage_id] = True
+                return True
+            return False
+    
+    def is_modified(self, stage_id):
+        """Check if a stage has unsaved modifications.
+        
+        Args:
+            stage_id: The unique ID of the stage
+            
+        Returns:
+            bool: True if the stage has unsaved modifications, False otherwise
+        """
+        with self._lock:
+            return self._stage_modified.get(stage_id, False)
+    
+    def save_stage(self, stage_id):
+        """Save a stage if it has been modified.
+        
+        Args:
+            stage_id: The unique ID of the stage
+            
+        Returns:
+            bool: True if the stage was saved, False otherwise
+        """
+        with self._lock:
+            if stage_id in self._stages and self._stage_modified.get(stage_id, False):
+                try:
+                    self._stages[stage_id].GetRootLayer().Save()
+                    self._stage_modified[stage_id] = False
+                    return True
+                except Exception as e:
+                    logger.exception(f"Error saving stage {stage_id}: {str(e)}")
+                    return False
+            return False
+    
+    def unregister_stage(self, stage_id, save_if_modified=True):
+        """Unregister a stage and optionally save it if modified.
+        
+        Args:
+            stage_id: The unique ID of the stage
+            save_if_modified: Whether to save the stage if it has been modified
+            
+        Returns:
+            bool: True if the stage was found and unregistered, False otherwise
+        """
+        with self._lock:
+            if stage_id in self._stages:
+                stage = self._stages[stage_id]
+                
+                # Save if modified and requested
+                if save_if_modified and self._stage_modified.get(stage_id, False):
+                    try:
+                        stage.GetRootLayer().Save()
+                    except Exception as e:
+                        logger.exception(f"Error saving stage during unregister: {str(e)}")
+                
+                # Unload stage and remove from registry
+                stage.Unload()
+                del self._stages[stage_id]
+                del self._stage_file_paths[stage_id]
+                del self._stage_access_times[stage_id]
+                del self._stage_modified[stage_id]
+                
+                return True
+            return False
+    
+    def perform_cache_cleanup(self):
+        """Clean up the stage cache based on LRU policy.
+        
+        This will unload and unregister the least recently used stages.
+        """
+        with self._lock:
+            # No cleanup needed if under size limit
+            if len(self._stages) <= self.max_cache_size:
+                return 0
+            
+            # Sort stages by access time (oldest first)
+            sorted_ids = sorted(self._stage_access_times.keys(), 
+                               key=lambda k: self._stage_access_times[k])
+            
+            # Calculate how many stages to remove
+            num_to_remove = len(self._stages) - self.max_cache_size
+            stages_to_remove = sorted_ids[:num_to_remove]
+            
+            # Remove the oldest stages
+            for stage_id in stages_to_remove:
+                self.unregister_stage(stage_id, save_if_modified=True)
+            
+            return len(stages_to_remove)
+    
+    def get_all_stage_ids(self):
+        """Get a list of all registered stage IDs.
+        
+        Returns:
+            list: List of all stage IDs in the registry
+        """
+        with self._lock:
+            return list(self._stages.keys())
+    
+    def get_stats(self):
+        """Get statistics about the stage registry.
+        
+        Returns:
+            dict: Statistics about the registry
+        """
+        with self._lock:
+            return {
+                "total_stages": len(self._stages),
+                "max_cache_size": self.max_cache_size,
+                "modified_stages": sum(1 for v in self._stage_modified.values() if v),
+                "stage_ids": list(self._stages.keys())
+            }
+
+# Create the global stage registry
+stage_registry = StageRegistry(max_cache_size=10)  # Adjust size as needed
+
+# =============================================================================
+# Helper Functions and Classes
+# =============================================================================
+
+# =============================================================================
+# Level A: Basic USD Operations
+# =============================================================================
+
+@mcp.tool()
+def open_stage(file_path: str, create_if_missing: bool = False) -> str:
+    """Open an existing USD stage or create a new one if specified.
+    
+    Args:
+        file_path: Path to the USD file to open
+        create_if_missing: Whether to create the stage if it doesn't exist
+        
+    Returns:
+        JSON string with success status, message, and stage data including stage_id
+    """
+    try:
+        # Validate file_path
+        if not file_path:
+            raise ValueError("File path cannot be empty")
+            
+        abs_path = os.path.abspath(file_path)
+        
+        # Check if file exists
+        file_exists = os.path.exists(file_path)
+        
+        if not file_exists and not create_if_missing:
+            return error_response(f"File not found: {file_path}")
+            
+        # Open or create the stage
+        stage = None
+        if file_exists:
+            stage = Usd.Stage.Open(file_path)
+            if not stage:
+                return error_response(f"Failed to open stage: {file_path}")
+                
+            logger.info(f"Opened existing stage: {file_path}")
+        else:
+            # Create new stage with minimal setup
+            stage = Usd.Stage.CreateNew(file_path)
+            if not stage:
+                return error_response(f"Failed to create stage: {file_path}")
+                
+            # Set up a basic empty stage
+            root_prim = UsdGeom.Xform.Define(stage, '/root')
+            stage.SetDefaultPrim(root_prim.GetPrim())
+            
+            # Save the new stage
+            stage.GetRootLayer().Save()
+            logger.info(f"Created new stage: {file_path}")
+        
+        # Register the stage with the registry
+        stage_id = stage_registry.register_stage(file_path, stage)
+        
+        # Get basic stage info
+        stage_info = {
+            "stage_id": stage_id,
+            "file_path": file_path,
+            "up_axis": UsdGeom.GetStageUpAxis(stage),
+            "default_prim": str(stage.GetDefaultPrim().GetPath()) if stage.GetDefaultPrim() else None,
+            "time_code_range": [stage.GetStartTimeCode(), stage.GetEndTimeCode()],
+            "newly_created": not file_exists
+        }
+        
+        return success_response(
+            f"Successfully {'created' if not file_exists else 'opened'} USD stage at {file_path}",
+            stage_info
+        )
+    except Exception as e:
+        logger.exception(f"Error opening stage: {str(e)}")
+        return error_response(f"Error opening stage: {str(e)}")
+
+@mcp.tool()
+def close_stage_by_id(stage_id: str, save_if_modified: bool = True) -> str:
+    """Unload and release a USD stage from memory using its ID
+    
+    Args:
+        stage_id: The unique ID of the stage to close
+        save_if_modified: Whether to save the stage if it has unsaved modifications
+        
+    Returns:
+        JSON string with success status and message
+    """
+    try:
+        # Check if stage exists in registry
+        file_path = stage_registry.get_stage_path(stage_id)
+        if not file_path:
+            return error_response(f"Stage with ID {stage_id} not found in registry")
+        
+        # Unregister the stage (this also unloads it)
+        if stage_registry.unregister_stage(stage_id, save_if_modified):
+            return success_response(f"Stage {file_path} (ID: {stage_id}) successfully closed")
+        else:
+            return error_response(f"Failed to close stage with ID {stage_id}")
+    except Exception as e:
+        logger.exception(f"Error closing stage: {str(e)}")
+        return error_response(f"Error closing stage: {str(e)}")
+
+# =============================================================================
+# Level B: Advanced USD Operations Using Stage Registry
+# =============================================================================
+
+@mcp.tool()
+def set_transform_by_id(
+    stage_id: str, 
+    prim_path: str, 
+    translate: Optional[tuple] = None, 
+    rotate: Optional[tuple] = None, 
+    scale: Optional[tuple] = None,
+    time_code: Optional[float] = None
+) -> str:
+    """Set or modify the transformation of a prim using the stage ID
+    
+    Args:
+        stage_id: ID of the stage containing the prim
+        prim_path: Path to the prim to transform
+        translate: Optional XYZ translation values as tuple
+        rotate: Optional XYZ rotation values in degrees as tuple
+        scale: Optional XYZ scale values as tuple
+        time_code: Optional time code for animation
+        
+    Returns:
+        JSON string with success status and message
+    """
+    try:
+        # Get the stage from registry
+        stage = stage_registry.get_stage(stage_id)
+        if not stage:
+            return error_response(f"Stage with ID {stage_id} not found")
+        
+        # Get the file path for logging/response
+        file_path = stage_registry.get_stage_path(stage_id)
+            
+        # Get the prim
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim:
+            return error_response(f"Prim not found at path: {prim_path}")
+        
+        # Import modules for transform operations
+        from pxr import UsdGeom, Gf
+        
+        # Check if prim can be transformed
+        if not prim.IsA(UsdGeom.Xformable):
+            return error_response(f"Prim at {prim_path} is not transformable")
+        
+        # Get the transform API
+        xform_api = UsdGeom.XformCommonAPI(UsdGeom.Xformable(prim))
+        
+        # Preserve existing transforms if any parameter is None
+        existing_translate, existing_rotate, existing_scale = (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (1.0, 1.0, 1.0)
+        try:
+            result = xform_api.GetXformVectors(time_code)
+            if result:
+                existing_translate, existing_rotate, existing_scale = result[1:4]
+        except:
+            # Use defaults if we can't get existing transforms
+            pass
+        
+        # Apply the transforms
+        translate = translate or existing_translate
+        rotate = rotate or existing_rotate
+        scale = scale or existing_scale
+        
+        # Set the transform at given time or default time
+        xform_api.SetXformVectors(
+            Gf.Vec3d(translate), 
+            Gf.Vec3f(rotate), 
+            Gf.Vec3f(scale),
+            UsdGeom.XformCommonAPI.RotationOrderXYZ, 
+            time_code
+        )
+        
+        # Mark stage as modified
+        stage_registry.mark_as_modified(stage_id)
+        
+        # Save stage
+        stage.GetRootLayer().Save()
+        
+        return success_response(
+            f"Successfully applied transform to {prim_path}",
+            {
+                "stage_id": stage_id,
+                "file_path": file_path,
+                "prim_path": prim_path,
+                "translate": translate,
+                "rotate": rotate,
+                "scale": scale,
+                "time_code": time_code
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error setting transform: {str(e)}")
+        return error_response(f"Error setting transform: {str(e)}")
+
+@mcp.tool()
+def analyze_stage_by_id(stage_id: str, include_attributes: bool = False) -> str:
+    """Analyze a USD stage by ID and return information about its contents
+    
+    Args:
+        stage_id: ID of the stage to analyze
+        include_attributes: Whether to include detailed attribute information
+        
+    Returns:
+        JSON string containing stage information or error description
+    """
+    try:
+        # Get stage from registry
+        stage = stage_registry.get_stage(stage_id)
+        if not stage:
+            return error_response(f"Stage with ID {stage_id} not found")
+        
+        # Get file path for response
+        file_path = stage_registry.get_stage_path(stage_id)
+        
+        # Get basic stage information
+        result = {
+            "stage_id": stage_id,
+            "file_path": file_path,
+            "root_layer_path": stage.GetRootLayer().realPath,
+            "up_axis": UsdGeom.GetStageUpAxis(stage),
+            "time_code_range": [stage.GetStartTimeCode(), stage.GetEndTimeCode()],
+            "default_prim": str(stage.GetDefaultPrim().GetPath()) if stage.GetDefaultPrim() else None,
+            "prims": []
+        }
+        
+        # Traverse prim hierarchy with SdfChangeBlock for better performance
+        with Sdf.ChangeBlock():
+            for prim in Usd.PrimRange.Stage(stage):
+                prim_data = {
+                    "path": str(prim.GetPath()),
+                    "type": prim.GetTypeName(),
+                    "active": prim.IsActive(),
+                }
+                
+                # Add attributes if requested
+                if include_attributes and prim.GetTypeName():
+                    prim_data["attributes"] = []
+                    
+                    for attribute in prim.GetAttributes():
+                        attr_data = {
+                            "name": attribute.GetName(),
+                            "type": str(attribute.GetTypeName())
+                        }
+                        
+                        # Try to get the attribute value
+                        try:
+                            value = attribute.Get()
+                            if value is not None:
+                                attr_data["value"] = str(value)
+                        except:
+                            pass  # Skip if we can't get the value
+                        
+                        prim_data["attributes"].append(attr_data)
+                
+                result["prims"].append(prim_data)
+        
+        return success_response("Stage analysis complete", result)
+    except Exception as e:
+        logger.exception(f"Error analyzing stage: {str(e)}")
+        return error_response(f"Error analyzing stage: {str(e)}")
+
+@mcp.tool()
+def create_mesh_by_id(
+    stage_id: str, 
+    prim_path: str, 
+    points: List[tuple], 
+    face_vertex_counts: List[int], 
+    face_vertex_indices: List[int]
+) -> str:
+    """Create a mesh in a USD stage with specified geometry data using stage ID
+    
+    Args:
+        stage_id: ID of the stage to modify
+        prim_path: Path within the stage to create the mesh
+        points: List of 3D points (vertices) as tuples
+        face_vertex_counts: Number of vertices per face
+        face_vertex_indices: Indices into the points array for each vertex of each face
+        
+    Returns:
+        JSON string with success status and message
+    """
+    try:
+        # Validate inputs
+        if not points:
+            raise MeshError("Points list cannot be empty")
+        
+        if not face_vertex_counts:
+            raise MeshError("Face vertex counts list cannot be empty")
+            
+        if not face_vertex_indices:
+            raise MeshError("Face vertex indices list cannot be empty")
+            
+        if len(face_vertex_indices) != sum(face_vertex_counts):
+            raise MeshError(f"Face vertex indices count ({len(face_vertex_indices)}) does not match sum of face vertex counts ({sum(face_vertex_counts)})")
+        
+        # Get stage from registry
+        stage = stage_registry.get_stage(stage_id)
+        if not stage:
+            return error_response(f"Stage with ID {stage_id} not found")
+        
+        # Get file path for response
+        file_path = stage_registry.get_stage_path(stage_id)
+        
+        # Use a ChangeBlock for performance
+        with Sdf.ChangeBlock():
+            # Create mesh
+            mesh = UsdGeom.Mesh.Define(stage, prim_path)
+            
+            # Set mesh data
+            mesh.GetPointsAttr().Set(points)
+            mesh.GetFaceVertexCountsAttr().Set(face_vertex_counts)
+            mesh.GetFaceVertexIndicesAttr().Set(face_vertex_indices)
+            
+            # Add display color attribute if it doesn't exist
+            if not mesh.GetDisplayColorAttr():
+                mesh.CreateDisplayColorAttr()
+                mesh.GetDisplayColorAttr().Set([(0.8, 0.8, 0.8)])  # Default gray color
+        
+        # Mark stage as modified
+        stage_registry.mark_as_modified(stage_id)
+        
+        # Save stage
+        stage.GetRootLayer().Save()
+        
+        return success_response(
+            f"Successfully created mesh at {prim_path}",
+            {
+                "stage_id": stage_id,
+                "file_path": file_path,
+                "prim_path": prim_path
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error creating mesh: {str(e)}")
+        return error_response(f"Error creating mesh: {str(e)}")
+
+@mcp.tool()
+def create_primitive_by_id(stage_id: str, prim_type: str, prim_path: str, size: float = 1.0, position: tuple = (0, 0, 0)) -> str:
+    """Create a geometric primitive in a USD stage using stage ID
+    
+    Args:
+        stage_id: ID of the stage to modify
+        prim_type: Type of primitive ('cube', 'sphere', 'cylinder', 'cone')
+        prim_path: Path where to create the primitive
+        size: Size of the primitive (default: 1.0)
+        position: XYZ position tuple (default: origin)
+        
+    Returns:
+        JSON string with success status and message
+    """
+    try:
+        # Validate prim_type
+        valid_types = {'cube', 'sphere', 'cylinder', 'cone'}
+        if prim_type.lower() not in valid_types:
+            raise ValueError(f"Invalid primitive type: {prim_type}. Must be one of {valid_types}")
+        
+        # Get stage from registry
+        stage = stage_registry.get_stage(stage_id)
+        if not stage:
+            return error_response(f"Stage with ID {stage_id} not found")
+        
+        # Get file path for response
+        file_path = stage_registry.get_stage_path(stage_id)
+        
+        # Create the primitive
+        with Sdf.ChangeBlock():
+            if prim_type.lower() == 'cube':
+                prim = UsdGeom.Cube.Define(stage, prim_path)
+                prim.CreateSizeAttr(size)
+            elif prim_type.lower() == 'sphere':
+                prim = UsdGeom.Sphere.Define(stage, prim_path)
+                prim.CreateRadiusAttr(size / 2.0)
+            elif prim_type.lower() == 'cylinder':
+                prim = UsdGeom.Cylinder.Define(stage, prim_path)
+                prim.CreateRadiusAttr(size / 2.0)
+                prim.CreateHeightAttr(size)
+            elif prim_type.lower() == 'cone':
+                prim = UsdGeom.Cone.Define(stage, prim_path)
+                prim.CreateRadiusAttr(size / 2.0)
+                prim.CreateHeightAttr(size)
+            
+            # Set position
+            from pxr import Gf
+            xform_api = UsdGeom.XformCommonAPI(prim)
+            xform_api.SetTranslate(Gf.Vec3d(position))
+        
+        # Mark stage as modified
+        stage_registry.mark_as_modified(stage_id)
+        
+        # Save stage
+        stage.GetRootLayer().Save()
+        
+        return success_response(
+            f"Successfully created {prim_type} at {prim_path}",
+            {
+                "stage_id": stage_id,
+                "file_path": file_path,
+                "prim_path": prim_path,
+                "prim_type": prim_type,
+                "size": size,
+                "position": position
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error creating primitive: {str(e)}")
+        return error_response(f"Error creating primitive: {str(e)}")
+
+@mcp.tool()
+def create_reference_by_id(stage_id: str, prim_path: str, reference_file_path: str, reference_prim_path: str = "") -> str:
+    """Add a reference to an external USD file using stage ID
+    
+    Args:
+        stage_id: ID of the stage to modify
+        prim_path: Path where to create/add reference
+        reference_file_path: Path to the referenced USD file
+        reference_prim_path: Optional prim path within the referenced file (defaults to root)
+        
+    Returns:
+        JSON string with success status and message
+    """
+    try:
+        # Validate input
+        if not os.path.exists(reference_file_path):
+            raise ValueError(f"Referenced file does not exist: {reference_file_path}")
+            
+        # Get stage from registry
+        stage = stage_registry.get_stage(stage_id)
+        if not stage:
+            return error_response(f"Stage with ID {stage_id} not found")
+        
+        # Get file path for response
+        file_path = stage_registry.get_stage_path(stage_id)
+        
+        # Get or create the prim
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim:
+            # Create the required prim if it doesn't exist
+            prim = UsdGeom.Xform.Define(stage, prim_path).GetPrim()
+        
+        # Add the reference
+        prim.GetReferences().AddReference(reference_file_path, reference_prim_path)
+        
+        # Mark stage as modified
+        stage_registry.mark_as_modified(stage_id)
+        
+        # Save stage
+        stage.GetRootLayer().Save()
+        
+        return success_response(
+            f"Successfully added reference to {reference_file_path} at {prim_path}",
+            {
+                "stage_id": stage_id,
+                "file_path": file_path,
+                "prim_path": prim_path,
+                "reference_path": reference_file_path,
+                "reference_prim_path": reference_prim_path or "/"
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error adding reference: {str(e)}")
+        return error_response(f"Error adding reference: {str(e)}")
+
+@mcp.tool()
+def create_material_by_id(stage_id: str, material_path: str, diffuse_color: tuple = (0.8, 0.8, 0.8), metallic: float = 0.0, roughness: float = 0.4) -> str:
+    """Create an OmniPBR material in a USD stage using stage ID
+    
+    Args:
+        stage_id: ID of the stage to modify
+        material_path: Path where to create the material
+        diffuse_color: RGB tuple for diffuse color (default: light gray)
+        metallic: Metallic value between 0.0 and 1.0 (default: 0.0)
+        roughness: Roughness value between 0.0 and 1.0 (default: 0.4)
+        
+    Returns:
+        JSON string with success status and message
+    """
+    try:
+        # Validate parameters
+        if not (0 <= metallic <= 1):
+            raise ValueError(f"Metallic value must be between 0 and 1, got {metallic}")
+        if not (0 <= roughness <= 1): 
+            raise ValueError(f"Roughness value must be between 0 and 1, got {roughness}")
+            
+        # Get stage from registry
+        stage = stage_registry.get_stage(stage_id)
+        if not stage:
+            return error_response(f"Stage with ID {stage_id} not found")
+        
+        # Get file path for response
+        file_path = stage_registry.get_stage_path(stage_id)
+        
+        # Create material with Sdf.ChangeBlock for better performance
+        with Sdf.ChangeBlock():
+            # Create material
+            from pxr import UsdShade
+            material = UsdShade.Material.Define(stage, material_path)
+            
+            # Create shader
+            shader_path = f"{material_path}/Shader"
+            shader = UsdShade.Shader.Define(stage, shader_path)
+            shader.CreateIdAttr("OmniPBR")
+            
+            # Set shader inputs
+            shader.CreateInput("diffuse_color", Sdf.ValueTypeNames.Color3f).Set(diffuse_color)
+            shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(metallic)
+            shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(roughness)
+            
+            # Connect shader to material
+            material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+        
+        # Mark stage as modified
+        stage_registry.mark_as_modified(stage_id)
+        
+        # Save stage
+        stage.GetRootLayer().Save()
+        
+        return success_response(
+            f"Successfully created material at {material_path}",
+            {
+                "stage_id": stage_id,
+                "file_path": file_path,
+                "material_path": material_path,
+                "properties": {
+                    "diffuse_color": diffuse_color,
+                    "metallic": metallic,
+                    "roughness": roughness
+                }
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error creating material: {str(e)}")
+        return error_response(f"Error creating material: {str(e)}")
+
+@mcp.tool()
+def bind_material_by_id(stage_id: str, prim_path: str, material_path: str) -> str:
+    """Bind a material to a prim in the USD stage using stage ID
+    
+    Args:
+        stage_id: ID of the stage to modify
+        prim_path: Path to the prim to bind the material to
+        material_path: Path to the material to bind
+        
+    Returns:
+        JSON string with success status and message
+    """
+    try:
+        # Get stage from registry
+        stage = stage_registry.get_stage(stage_id)
+        if not stage:
+            return error_response(f"Stage with ID {stage_id} not found")
+        
+        # Get file path for response
+        file_path = stage_registry.get_stage_path(stage_id)
+        
+        # Get the prim and material
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim:
+            return error_response(f"Prim not found: {prim_path}")
+            
+        material_prim = stage.GetPrimAtPath(material_path)
+        if not material_prim:
+            return error_response(f"Material not found: {material_path}")
+        
+        # Bind material to prim
+        from pxr import UsdShade
+        material = UsdShade.Material(material_prim)
+        UsdShade.MaterialBindingAPI(prim).Bind(material)
+        
+        # Mark stage as modified
+        stage_registry.mark_as_modified(stage_id)
+        
+        # Save stage
+        stage.GetRootLayer().Save()
+        
+        return success_response(
+            f"Successfully bound material {material_path} to {prim_path}",
+            {
+                "stage_id": stage_id,
+                "file_path": file_path,
+                "prim_path": prim_path,
+                "material_path": material_path
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error binding material: {str(e)}")
+        return error_response(f"Error binding material: {str(e)}")
 
 if __name__ == "__main__":
     args = parse_arguments()

@@ -4,6 +4,18 @@
 
 # Omniverse USD MCP Server
 
+> **NEW: Two-Level Architecture Refactoring**
+> 
+> This project has been refactored to implement a more modular and maintainable architecture with the following improvements:
+> 
+> - **Stage Registry**: Centralized, thread-safe management of USD stages with unique IDs
+> - **Improved Memory Management**: Explicit stage lifecycle with efficient LRU caching
+> - **Thread Safety**: All operations use proper locking for thread safety
+> - **Consistent API**: All operations follow a stage ID-based pattern for consistency
+> - **Enhanced Documentation**: See REFACTORING.md for detailed architecture overview
+>
+> **Migration Note**: Client code using the old API should be updated to use the new stage ID-based operations for best performance and reliability.
+
 An MCP (Model Context Protocol) server for working with USD (Universal Scene Description) and NVIDIA Omniverse. This server enables AI assistants and other clients to create, manipulate, and analyze USD scenes through a standardized API.
 
 ## Primary Focus: Cursor Integration
@@ -320,6 +332,60 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 3. **USD / Omniverse APIs**  
    - Under the hood uses `pxr.Usd`, `pxr.Sdf`, and `omni.client`  
    - Manages stages, layers, references, payloads, and Omniverse Nucleus sessions  
+
+### Two-Level Architecture
+
+The server is structured in two distinct layers for clarity and maintainability:
+
+#### Level A: Basic USD Operations
+
+This layer focuses on core USD stage management and direct API interactions:
+
+- **StageRegistry**: Central, thread-safe registry that maintains a map of `stage_id → Usd.Stage` objects
+- **Basic Stage Operations**: Opening, closing, and saving stages with unique IDs
+- **Memory Management**: Implements LRU caching for efficient memory usage
+- **Thread Safety**: All operations use locking to ensure thread-safe access
+- **Explicit Stage Lifecycle**: Clear ownership model with explicit open/close operations
+
+```python
+# Level A example: Opening a stage and getting a stage_id
+response = client.call_tool("open_stage", {"file_path": "my_scene.usda"})
+stage_id = response["data"]["stage_id"]
+
+# Using the stage_id for subsequent operations
+client.call_tool("close_stage_by_id", {"stage_id": stage_id})
+```
+
+#### Level B: Advanced USD Operations
+
+This layer builds on Level A to provide higher-level USD manipulation tools:
+
+- **Stage ID-based Operations**: Uses stage IDs from Level A for all operations
+- **Scene Graph Visualization**: Advanced tools for analyzing and visualizing USD scenes
+- **Complex Manipulation**: Physics, materials, animation, and other advanced USD features 
+- **Performance Optimizations**: Batched operations and specialized handling for complex scenes
+
+```python
+# Level B example: Transforming an object using stage_id
+client.call_tool("set_transform_by_id", {
+    "stage_id": stage_id,
+    "prim_path": "/World/Cube",
+    "translate": [1, 2, 3]
+})
+
+# Visualizing the scene graph
+client.call_tool("visualize_scene_graph_by_id", {
+    "stage_id": stage_id,
+    "output_format": "html"
+})
+```
+
+This architecture provides several benefits:
+- Cleaner separation of concerns
+- More explicit control over stage lifecycle
+- Reduced redundancy in file path handling
+- Better memory management and performance
+- Clear upgrade path for new features
 
 ---
 

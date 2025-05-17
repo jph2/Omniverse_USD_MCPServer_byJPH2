@@ -22,6 +22,7 @@ import logging
 from typing import Dict, Any, List, Optional, Tuple
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
+from pxr import Usd
 
 # Setup logging
 logging.basicConfig(

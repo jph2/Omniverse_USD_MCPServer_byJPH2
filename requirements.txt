@@ -1,5 +1,6 @@
 # Core dependencies
 pxr>=2.0.0  # Pixar USD library
+mcp>=0.1.0  # Model Context Protocol library
 flask>=2.0.0  # For HTTP API
 requests>=2.25.0  # For client HTTP requests
 typing-extensions>=4.0.0  # For type hints

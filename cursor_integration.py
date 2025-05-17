@@ -103,34 +103,36 @@ class CursorUsdTools:
     
     # Stage Operations
     
-    def open_stage(self, file_path: str, create_new: bool = False) -> Dict[str, Any]:
+    def open_stage(self, file_path: str, create_if_missing: bool = False) -> Dict[str, Any]:
         """
         Open an existing USD stage or create a new one.
         
         Args:
             file_path: Path to the USD file
-            create_new: Whether to create a new stage if it doesn't exist
+            create_if_missing: Whether to create a new stage if it doesn't exist
             
         Returns:
             Dictionary containing the stage_id if successful
         """
         return self._call_server("open_stage", {
             "file_path": file_path,
-            "createNew": create_new
+            "create_if_missing": create_if_missing
         })
     
-    def close_stage(self, stage_id: str) -> Dict[str, Any]:
+    def close_stage(self, stage_id: str, save_if_modified: bool = True) -> Dict[str, Any]:
         """
         Close an open USD stage to free resources.
         
         Args:
             stage_id: ID of the stage to close
+            save_if_modified: Whether to save the stage if it has been modified
             
         Returns:
             Result of the operation
         """
-        return self._call_server("close_stage", {
-            "stage_id": stage_id
+        return self._call_server("close_stage_by_id", {
+            "stage_id": stage_id,
+            "save_if_modified": save_if_modified
         })
     
     def save_stage(self, stage_id: str, file_path: Optional[str] = None) -> Dict[str, Any]:
@@ -148,7 +150,7 @@ class CursorUsdTools:
         if file_path:
             data["file_path"] = file_path
             
-        return self._call_server("save_stage", data)
+        return self._call_server("save_stage_by_id", data)
     
     # Prim Operations
     
@@ -163,7 +165,7 @@ class CursorUsdTools:
         Returns:
             Dictionary containing the list of prim paths
         """
-        return self._call_server("list_prims", {
+        return self._call_server("list_prims_by_id", {
             "stage_id": stage_id,
             "root_path": root_path
         })
@@ -180,7 +182,7 @@ class CursorUsdTools:
         Returns:
             Result of the operation
         """
-        return self._call_server("define_prim", {
+        return self._call_server("define_prim_by_id", {
             "stage_id": stage_id,
             "path": prim_path,
             "type": prim_type
@@ -204,9 +206,9 @@ class CursorUsdTools:
         if position is None:
             position = [0.0, 0.0, 0.0]
             
-        return self._call_server("create_primitive", {
+        return self._call_server("create_primitive_by_id", {
             "stage_id": stage_id,
-            "primitive_type": primitive_type,
+            "prim_type": primitive_type,
             "prim_path": prim_path,
             "size": size,
             "position": position
@@ -232,7 +234,7 @@ class CursorUsdTools:
         if diffuse_color is None:
             diffuse_color = [0.8, 0.8, 0.8]
             
-        return self._call_server("create_material", {
+        return self._call_server("create_material_by_id", {
             "stage_id": stage_id,
             "material_path": material_path,
             "diffuse_color": diffuse_color,
@@ -252,7 +254,7 @@ class CursorUsdTools:
         Returns:
             Result of the operation
         """
-        return self._call_server("bind_material", {
+        return self._call_server("bind_material_by_id", {
             "stage_id": stage_id,
             "material_path": material_path,
             "prim_path": prim_path
@@ -323,13 +325,13 @@ class CursorUsdTools:
         }
         
         if position is not None:
-            data["position"] = position
+            data["translate"] = position
         if rotation is not None:
-            data["rotation"] = rotation
+            data["rotate"] = rotation
         if scale is not None:
             data["scale"] = scale
             
-        return self._call_server("set_transform", data)
+        return self._call_server("set_transform_by_id", data)
     
     def create_animation(self, stage_id: str, prim_path: str, property_path: str,
                         keyframes: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -374,7 +376,7 @@ class CursorUsdTools:
         """
         data = {
             "stage_id": stage_id,
-            "format": format,
+            "output_format": format,
             "theme": theme
         }
         
@@ -383,9 +385,9 @@ class CursorUsdTools:
         if max_depth is not None:
             data["max_depth"] = max_depth
         if filter_types:
-            data["filter_types"] = filter_types
+            data["filter_type"] = filter_types
             
-        return self._call_server("visualize_scene_graph", data)
+        return self._call_server("visualize_scene_graph_by_id", data)
 
     # Helper methods for common operations
     
@@ -407,7 +409,7 @@ class CursorUsdTools:
         """
         try:
             # Create a new stage
-            stage_result = self.open_stage(file_path, create_new=True)
+            stage_result = self.open_stage(file_path, create_if_missing=True)
             if not stage_result["ok"]:
                 return stage_result
                 

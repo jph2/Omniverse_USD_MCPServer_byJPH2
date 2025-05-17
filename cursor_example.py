@@ -23,7 +23,7 @@ def main():
     
     # Create a new stage
     print("\n1. Creating a new USD stage...")
-    stage_result = tools.open_stage(demo_file, create_new=True)
+    stage_result = tools.open_stage(demo_file, create_if_missing=True)
     
     if not stage_result["ok"]:
         print(f"Error creating stage: {stage_result['message']}")
