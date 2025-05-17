@@ -1279,6 +1279,71 @@ class UsdMcpClient:
             print(result.content)
             return None
 
+    async def get_health(self):
+        """Get comprehensive health information about the server
+        
+        Returns:
+            Health information or None on error
+        """
+        if not self.session:
+            raise ValueError("Not connected to server")
+        
+        print("\n--- Getting server health information ---")
+        health_result = await self.session.call_tool("get_health", {})
+        
+        try:
+            response = json.loads(health_result.content)
+            if response.get("ok", False):
+                health_data = response.get("data", {})
+                print(f"Server status: {health_data.get('status', 'unknown')}")
+                print(f"Uptime: {health_data.get('server', {}).get('uptime_formatted', 'unknown')}")
+                print(f"Memory usage: {health_data.get('memory', {}).get('rss_mb', 0):.2f} MB")
+                print(f"Stages in cache: {health_data.get('stages', {}).get('count', 0)}")
+                return health_data
+            else:
+                logger.error(f"Error: {response.get('message', 'Unknown error')}")
+                return None
+        except json.JSONDecodeError:
+            print(health_result.content)
+            return None
+    
+    async def get_available_tools(self):
+        """Get detailed information about all available tools on the server
+        
+        Returns:
+            Tools information or None on error
+        """
+        if not self.session:
+            raise ValueError("Not connected to server")
+        
+        print("\n--- Getting available tools information ---")
+        tools_result = await self.session.call_tool("get_available_tools", {})
+        
+        try:
+            response = json.loads(tools_result.content)
+            if response.get("ok", False):
+                tools_data = response.get("data", {})
+                print(f"Available tools: {tools_data.get('tool_count', 0)}")
+                
+                # Print categories
+                categories = tools_data.get('categories', [])
+                print(f"Categories: {', '.join(categories)}")
+                
+                # Optional: Print a summary of tools by category
+                print("\nTools by category:")
+                for category, tools in tools_data.get('tools_by_category', {}).items():
+                    print(f"  {category}: {len(tools)} tools")
+                    for tool in tools:
+                        print(f"    - {tool['name']}: {tool['description']}")
+                
+                return tools_data
+            else:
+                logger.error(f"Error: {response.get('message', 'Unknown error')}")
+                return None
+        except json.JSONDecodeError:
+            print(tools_result.content)
+            return None
+
 
 async def run_demo():
     """Run a demonstration of the USD MCP client functionality"""
@@ -1286,49 +1351,55 @@ async def run_demo():
     parser.add_argument('--server', default='python', help='Server command')
     parser.add_argument('--args', nargs='*', default=['usd_mcp_server.py'], help='Server arguments')
     parser.add_argument('--output', default='demo_output', help='Output directory for demo files')
-
+    
     args = parser.parse_args()
-
+    
     # Create output directory if it doesn't exist
     os.makedirs(args.output, exist_ok=True)
-
+    
     # Initialize client
     client = UsdMcpClient(args.server, args.args)
-
+    
     try:
         # Connect to server
         await client.connect()
-
+        
+        # Get server health information
+        await client.get_health()
+        
+        # Get available tools
+        await client.get_available_tools()
+        
         # List capabilities, tools, and resources
         await client.list_capabilities()
         await client.list_tools()
         await client.list_resources()
-
+                
         # Create a test stage
         test_file = os.path.join(args.output, "test_stage.usda")
         await client.create_test_stage(test_file)
-
+                
         # Create a mesh
         await client.create_cube_mesh(test_file)
-
+                
         # Analyze the stage
         await client.analyze_stage(test_file)
-
+        
         # Close the stage to release resources
         await client.close_stage(test_file)
-
+                
         # Get USD schema information
         await client.get_usd_schema()
-
+                
         # Get help information
         await client.get_omniverse_help()
-
+                
         # Preview development guide
         await client.get_development_guide()
-
+                
         # Search guide for specific topics
         await client.search_guide(["material", "shader"])
-
+                
     except Exception as e:
         logger.exception("Error in demo")
         print(f"Error during demo: {e}")

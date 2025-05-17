@@ -1,30 +1,32 @@
 # Core dependencies
-pxr>=2.0.0  # Pixar USD library
-mcp>=0.1.0  # Model Context Protocol library
-flask>=2.0.0  # For HTTP API
-requests>=2.25.0  # For client HTTP requests
-typing-extensions>=4.0.0  # For type hints
-numpy>=1.19.0  # For numerical operations
-pillow>=8.0.0  # For image processing (if needed)
-colorama>=0.4.4  # For colored terminal output
-pyzmq>=22.0.0  # For ZeroMQ protocol support (optional)
-websockets>=10.0  # For WebSocket support (optional)
+pxr==2.0.2  # Pixar USD library
+mcp==0.1.0  # Model Context Protocol library
+flask==2.3.3  # For HTTP API
+requests==2.31.0  # For client HTTP requests
+typing-extensions==4.8.0  # For type hints
+numpy==1.26.3  # For numerical operations
+pillow==10.2.0  # For image processing (if needed)
+colorama==0.4.6  # For colored terminal output
+pyzmq==25.1.2  # For ZeroMQ protocol support (optional)
+websockets==12.0  # For WebSocket support (optional)
+psutil==5.9.8  # For system and process monitoring
 
 # AI integration dependencies
-openai>=1.0.0  # For ChatGPT integration
-anthropic>=0.5.0  # For Claude integration
+openai==1.12.0  # For ChatGPT integration
+anthropic==0.8.1  # For Claude integration
 
 # Visualization dependencies
-jinja2>=3.0.0  # For HTML template rendering
-pygments>=2.10.0  # For syntax highlighting
+jinja2==3.1.3  # For HTML template rendering
+pygments==2.17.2  # For syntax highlighting
 
 # Omniverse specific (comment out if not available)
-# omni-kit-py>=104.0.0  # Omniverse Kit Python bindings
-# carbonite>=104.0.0  # Omniverse performance optimization
+# omni-kit-py==104.0.0  # Omniverse Kit Python bindings
+# carbonite==104.0.0  # Omniverse performance optimization
 
 # Development and testing
-pytest>=6.0.0  # For testing
-flake8>=4.0.0  # For linting
-black>=22.0.0  # For code formatting
+pytest==7.4.4  # For testing
+flake8==7.0.0  # For linting
+black==23.12.1  # For code formatting
+autopep8==2.0.4  # For automatic code formatting
 
 # Add any other dependencies your project needs 

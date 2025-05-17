@@ -25,6 +25,8 @@ import uuid
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Union, Set
+import psutil
+import inspect
 
 # Setup logging
 logging.basicConfig(
@@ -3671,6 +3673,167 @@ def add_rigid_body_by_id(stage_id: str, prim_path: str, mass: float = 1.0, is_dy
     except Exception as e:
         logger.exception(f"Error adding rigid body: {str(e)}")
         return error_response(f"Error adding rigid body: {str(e)}")
+
+@mcp.tool()
+def get_health() -> str:
+    """Get comprehensive health information about the server
+    
+    Returns:
+        JSON string with detailed health metrics
+    """
+    try:
+        # Calculate server uptime
+        uptime_seconds = int(time.time() - server_start_time)
+        
+        # Get process information
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        
+        # Get stage registry information
+        registry_stats = stage_registry.get_stats() if 'stage_registry' in globals() else {}
+        
+        # Collect health metrics
+        health_data = {
+            "status": "healthy",
+            "server": {
+                "name": SERVER_NAME,
+                "version": VERSION,
+                "uptime_seconds": uptime_seconds,
+                "uptime_formatted": f"{uptime_seconds // 86400}d {(uptime_seconds % 86400) // 3600}h {(uptime_seconds % 3600) // 60}m {uptime_seconds % 60}s",
+            },
+            "environment": {
+                "os": platform.system(),
+                "os_version": platform.version(),
+                "python_version": platform.python_version(),
+                "usd_version": getattr(Usd, "GetVersion", lambda: "unknown")(),
+                "processor": platform.processor(),
+                "hostname": platform.node()
+            },
+            "memory": {
+                "rss_bytes": memory_info.rss,
+                "rss_mb": memory_info.rss / (1024 * 1024),
+                "vms_bytes": memory_info.vms,
+                "vms_mb": memory_info.vms / (1024 * 1024),
+                "percent": process.memory_percent()
+            },
+            "cpu": {
+                "percent": process.cpu_percent(interval=0.1),
+                "threads": process.num_threads()
+            },
+            "stages": {
+                "count": len(stage_cache) if 'stage_cache' in globals() else 0,
+                "registry_size": registry_stats.get("total_stages", 0) if registry_stats else 0,
+                "modified_stages": registry_stats.get("modified_stages", 0) if registry_stats else 0
+            }
+        }
+        
+        return success_response("Server is healthy", health_data)
+    except Exception as e:
+        logger.exception(f"Error getting health information: {str(e)}")
+        return error_response(f"Error getting health information: {str(e)}", "HEALTH_CHECK_ERROR")
+
+@mcp.tool()
+def get_available_tools() -> str:
+    """Get comprehensive information about all available tools
+    
+    Returns:
+        JSON string with detailed information about all available tools
+    """
+    try:
+        import inspect
+        
+        tools_info = []
+        
+        # Get all functions with @mcp.tool() decorator
+        for name, func in inspect.getmembers(sys.modules[__name__]):
+            if hasattr(func, "__wrapped__") and hasattr(func, "__name__"):
+                # Get function signature
+                sig = inspect.signature(func.__wrapped__)
+                
+                # Extract parameter info
+                parameters = []
+                for param_name, param in sig.parameters.items():
+                    param_info = {
+                        "name": param_name,
+                        "required": param.default == inspect.Parameter.empty and param.kind != inspect.Parameter.VAR_POSITIONAL and param.kind != inspect.Parameter.VAR_KEYWORD,
+                    }
+                    
+                    # Add type information if available
+                    if param.annotation != inspect.Parameter.empty:
+                        param_info["type"] = str(param.annotation)
+                    
+                    # Add default value if available
+                    if param.default != inspect.Parameter.empty:
+                        param_info["default"] = str(param.default)
+                        
+                    parameters.append(param_info)
+                
+                # Get docstring and parse it
+                docstring = inspect.getdoc(func.__wrapped__) or ""
+                docstring_lines = docstring.split("\n")
+                short_description = docstring_lines[0] if docstring_lines else ""
+                
+                # Get return type
+                return_type = "unknown"
+                if sig.return_annotation != inspect.Signature.empty:
+                    return_type = str(sig.return_annotation)
+                
+                # Check if it's a stage ID-based function
+                is_stage_id_based = "stage_id" in sig.parameters
+                
+                # Build tool info
+                tool_info = {
+                    "name": func.__name__,
+                    "description": short_description,
+                    "parameters": parameters,
+                    "return_type": return_type,
+                    "is_stage_id_based": is_stage_id_based,
+                    "full_docstring": docstring
+                }
+                
+                tools_info.append(tool_info)
+        
+        # Group tools by category
+        tools_by_category = {}
+        
+        # Helper function to categorize tools
+        def categorize_tool(tool_name):
+            if "stage" in tool_name:
+                return "Stage Management"
+            elif "mesh" in tool_name or "primitive" in tool_name or "reference" in tool_name:
+                return "Geometry Creation"
+            elif "material" in tool_name:
+                return "Materials"
+            elif "physics" in tool_name or "rigid_body" in tool_name or "collider" in tool_name or "joint" in tool_name:
+                return "Physics"
+            elif "animation" in tool_name or "skeleton" in tool_name or "transform" in tool_name:
+                return "Animation"
+            elif "visualize" in tool_name or "analyze" in tool_name:
+                return "Visualization"
+            elif "server" in tool_name or "health" in tool_name or "registry" in tool_name or "available_tools" in tool_name:
+                return "Server Management"
+            else:
+                return "Other"
+        
+        # Group tools by category
+        for tool in tools_info:
+            category = categorize_tool(tool["name"])
+            if category not in tools_by_category:
+                tools_by_category[category] = []
+            tools_by_category[category].append(tool)
+        
+        return success_response(
+            f"Successfully retrieved information about {len(tools_info)} tools", 
+            {
+                "tool_count": len(tools_info),
+                "categories": list(tools_by_category.keys()),
+                "tools_by_category": tools_by_category,
+                "all_tools": tools_info
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error retrieving tools information: {str(e)}")
+        return error_response(f"Error retrieving tools information: {str(e)}", "TOOLS_INFO_ERROR")
 
 if __name__ == "__main__":
     args = parse_arguments()
