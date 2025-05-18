@@ -1,6 +1,6 @@
 # Contributing to Omniverse USD MCP Server
 
-Thank you for your interest in contributing to the Omniverse USD MCP Server project! This document provides guidelines and instructions for contributing.
+Thank you for your interest in contributing to the Omniverse USD MCP Server! This document provides guidelines and information to help you contribute effectively.
 
 ## Code of Conduct
 
@@ -40,33 +40,89 @@ Enhancement suggestions are welcome! Please include:
 
 ## Development Setup
 
-To set up a development environment:
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/yourusername/omniverse-usd-mcp-server.git
+   cd omniverse-usd-mcp-server
+   ```
 
-```bash
-# Clone your fork
-git clone https://github.com/YOUR-USERNAME/Omniverse_USD_MCPServer_byJPH2.git
-cd Omniverse_USD_MCPServer_byJPH2
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   pip install -e .  # Install in development mode
+   ```
 
-# Install dependencies
-pip install -r requirements.txt
+3. Install development dependencies:
+   ```bash
+   pip install flake8 black pytest
+   ```
 
-# Install development dependencies
-pip install pytest pytest-cov flake8
-```
+## Development Workflow
 
-## Code Style
+1. **Create a branch**: Always create a branch for your changes
+   ```bash
+   git checkout -b feature/your-feature-name
+   ```
 
-- Follow PEP 8 guidelines
-- Use meaningful variable names
-- Include docstrings for all functions, classes, and modules
-- Keep functions focused and modular
-- Comment complex sections of code
+2. **Make changes**: Implement your feature or fix
 
-## Testing
+3. **Run tests**: Make sure all tests pass
+   ```bash
+   pytest
+   ```
 
-- Add tests for new functionality
-- Ensure all tests pass before submitting a pull request
-- Run tests with `pytest`
+4. **Check code style**: Ensure your code follows the project's style guidelines
+   ```bash
+   flake8 usd_mcp_server
+   black usd_mcp_server
+   ```
+
+5. **Commit changes**: Use clear commit messages that describe the changes
+   ```bash
+   git commit -m "feat: add new feature X"
+   ```
+
+6. **Push changes**: Push your branch to your fork
+   ```bash
+   git push origin feature/your-feature-name
+   ```
+
+7. **Create a Pull Request**: Create a PR from your branch to the main repository
+
+## Continuous Integration
+
+The project uses GitHub Actions for CI, which automatically runs the following checks on all pull requests:
+
+- Linting with flake8
+- Code style checking with black
+- Syntax checking with Python's compileall
+- Running all tests with pytest
+
+Make sure all these checks pass before submitting your PR.
+
+## Adding New MCP Tools
+
+When adding new MCP tools:
+
+1. Add the new tool function in the appropriate module 
+2. Register it with the `@mcp.tool()` decorator
+3. Add comprehensive documentation in the function docstring
+4. Update the README.md to document the new tool
+5. Add tests for the new tool in the `tests/` directory
+
+## Code Style Guidelines
+
+- Follow [PEP 8](https://www.python.org/dev/peps/pep-0008/) coding style
+- Use type hints for function parameters and return values
+- Write docstrings for all public functions, classes, and modules
+- Keep functions focused on a single responsibility
+- Use meaningful variable and function names
+
+## Documentation
+
+- Update the README.md when adding new features or changing existing functionality
+- Keep the codebase and documentation in sync at all times
+- Document any known limitations or edge cases
 
 ## MCP Server Best Practices
 
@@ -82,3 +138,5 @@ When developing MCP servers, follow these best practices:
 ## License
 
 By contributing to this project, you agree that your contributions will be licensed under the project's MIT License. 
+
+Thank you for your contributions! 
