@@ -121,6 +121,14 @@ In the `examples/` directory, you'll find example scripts demonstrating how to u
 
 - `basic_example.py`: Shows basic stage creation and manipulation
 
+
+## Production Readiness: 
+Requires ~20 hours of polish (tests, CI, error handling) to meet enterprise standards.
+
+This implementation has a strong foundation but needs hardening for mission-critical workflows. If you’re willing to contribute missing tests/maintenance tools, it’s a viable starting point for USD automation.
+
+
+
 ## Future Roadmap
 
 Future releases will expand functionality to include:
