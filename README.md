@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 
-**WARNING totally WIP!!! and I have not looked at it in a while... | I don't think it is working in any meaningfullway!!!** 
+**!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!WARNING totally WIP!!! and I have not looked at it in a while... | I don't think it is working in any meaningfullway!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!** 
 
 A Model Context Protocol (MCP) server for working with Universal Scene Description (USD) and NVIDIA Omniverse. This server provides a standardized API for basic USD operations.
 
